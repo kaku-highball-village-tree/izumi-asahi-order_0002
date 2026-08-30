@@ -164,7 +164,7 @@ def window_proc(
                 for pszDroppedFilePath in listDroppedFilePaths:
                     report_processing_error(
                         pszDroppedFilePath,
-                        "朝日注文テンプレート処理0006",
+                        "旭注文テンプレート処理0006",
                         pszMappingError,
                     )
                 show_error_message_box(pszMappingError, WINDOW_TITLE)
@@ -179,7 +179,7 @@ def window_proc(
                 for pszDroppedFilePath in listDroppedFilePaths:
                     report_processing_error(
                         pszDroppedFilePath,
-                        "朝日注文テンプレート処理0004",
+                        "旭注文テンプレート処理0004",
                         pszSelectionError,
                     )
                 show_error_message_box(pszSelectionError, WINDOW_TITLE)
@@ -191,7 +191,7 @@ def window_proc(
                 for pszDroppedFilePath in listDroppedFilePaths:
                     report_processing_error(
                         pszDroppedFilePath,
-                        "朝日注文テンプレート処理0004",
+                        "旭注文テンプレート処理0004",
                         pszCancellationDetail,
                     )
                 show_error_message_box(
