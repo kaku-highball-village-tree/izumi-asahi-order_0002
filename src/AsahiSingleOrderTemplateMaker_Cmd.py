@@ -84,6 +84,8 @@ SUPPORTED_EXTENSIONS: set[str] = {".xlsx", ".tsv", ".csv"}
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 # 0.25は25%の商品削除確率を意味します。
 PRODUCT_DELETE_PROBABILITY: float = 0.25
+MIN_PRODUCT_COUNT: int = 1
+MAX_PRODUCT_COUNT: int = 10
 
 
 class ProductRow:
@@ -416,6 +418,29 @@ def validate_unique_product_codes(
             pszSourceName
             + "でproductCodeが重複しています。productCode = "
             + ", ".join(sorted(setDuplicateCodes))
+        )
+
+
+def validate_product_count(listProductRows: list[ProductRow]) -> None:
+    """商品数が1品目以上10品目以下であることを確認します。"""
+    iProductCount: int = len(listProductRows)
+    if iProductCount < MIN_PRODUCT_COUNT:
+        raise ValueError(
+            "入力ファイルの商品数が0品目です。"
+            + "商品数は"
+            + str(MIN_PRODUCT_COUNT)
+            + "品目以上"
+            + str(MAX_PRODUCT_COUNT)
+            + "品目以下にしてください。"
+        )
+    if iProductCount > MAX_PRODUCT_COUNT:
+        raise ValueError(
+            "入力ファイルの商品数が"
+            + str(MAX_PRODUCT_COUNT)
+            + "品目を超えています。商品数 = "
+            + str(iProductCount)
+            + "、上限 = "
+            + str(MAX_PRODUCT_COUNT)
         )
 
 
@@ -1793,6 +1818,7 @@ def process_input_file(
         listProductRows: list[ProductRow] = read_excel_rows(pszValidatedPath)
     else:
         listProductRows = read_delimited_rows(pszValidatedPath)
+    validate_product_count(listProductRows)
     objExcelOutputPath, objTsvOutputPath = get_output_file_paths(pszValidatedPath)
     objTemporaryExcelPath: Path = create_temporary_path(objExcelOutputPath, ".xlsx")
     objTemporaryTsvPath: Path = create_temporary_path(objTsvOutputPath, ".tsv")
