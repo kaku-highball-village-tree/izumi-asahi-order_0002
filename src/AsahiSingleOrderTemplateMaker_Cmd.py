@@ -1242,7 +1242,7 @@ def process_step0005_files(
                     "処理結果: 警告\n"
                     + "入力ファイル: "
                     + os.path.abspath(pszInputFileFullPath)
-                    + "\n発生した処理: 朝日注文テンプレート処理0005\n"
+                    + "\n発生した処理: 旭注文テンプレート処理0005\n"
                     + "警告内容: 商品削除抽選の結果、すべての商品が削除されました。"
                     + "処理0005はヘッダー2行だけで作成しました。\n"
                     + "商品削除確率: "
@@ -1861,7 +1861,7 @@ def process_input_file(
         listStep0006OutputPaths,
     )
     remove_old_error_file(pszValidatedPath)
-    print("朝日注文テンプレートファイルを作成しました。")
+    print("旭注文テンプレートファイルを作成しました。")
     print("Input: " + pszValidatedPath)
     print("Start Monday: " + objStartMonday.strftime("%Y/%m/%d"))
     print("Step0001 Excel: " + str(objExcelOutputPath))
@@ -1983,49 +1983,49 @@ def main() -> int:
     except Step0007Error as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0007",
+            "旭注文テンプレート処理0007",
             str(objException),
         )
         return 1
     except Step0006Error as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0006",
+            "旭注文テンプレート処理0006",
             str(objException),
         )
         return 1
     except Step0005Error as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0005",
+            "旭注文テンプレート処理0005",
             str(objException),
         )
         return 1
     except Step0004Error as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0004",
+            "旭注文テンプレート処理0004",
             str(objException),
         )
         return 1
     except Step0003Error as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0003",
+            "旭注文テンプレート処理0003",
             str(objException),
         )
         return 1
     except Step0002Error as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0002",
+            "旭注文テンプレート処理0002",
             str(objException),
         )
         return 1
     except Exception as objException:
         report_processing_error(
             pszInputFileFullPath,
-            "朝日注文テンプレート処理0001",
+            "旭注文テンプレート処理0001",
             str(objException),
         )
         return 1
