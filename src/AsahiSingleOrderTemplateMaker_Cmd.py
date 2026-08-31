@@ -2049,6 +2049,80 @@ def archive_stale_step0003_files(
     return listRenames
 
 
+def archive_skipped_step0007_files(
+    dictCenterPaths: dict[str, Path], objProgress: ProductProcessingProgress
+) -> list[Path]:
+    """対象データがない配送センターの古いStep0007を退避して名前を変更します。"""
+    listOldPaths: list[Path] = [
+        dictCenterPaths["step0007" + pszSuffix]
+        for pszSuffix in (".xlsx", ".tsv")
+        if dictCenterPaths["step0007" + pszSuffix].is_file()
+    ]
+    if not listOldPaths:
+        return []
+    objProgress.stale_files += len(listOldPaths)
+    iRequiredBytes: int = sum(objPath.stat().st_size for objPath in listOldPaths)
+    iFreeBytes: int = shutil.disk_usage(tempfile.gettempdir()).free
+    if iRequiredBytes > iFreeBytes:
+        raise ValueError(
+            "%TEMP%の空き容量が不足しています。必要容量 = "
+            + str(iRequiredBytes)
+            + "、空き容量 = "
+            + str(iFreeBytes)
+        )
+    if objProgress.temp_backup_directory == "なし":
+        objTempRoot = Path(tempfile.gettempdir()) / "AsahiSingleOrderTemplateMaker"
+        objTempRoot.mkdir(parents=True, exist_ok=True)
+        objBackupDirectory = get_unique_path(
+            objTempRoot / datetime.now().strftime("%Y%m%d%H%M%S")
+        )
+        objBackupDirectory.mkdir()
+        objProgress.temp_backup_directory = str(objBackupDirectory)
+    else:
+        objBackupDirectory = Path(objProgress.temp_backup_directory)
+        objBackupDirectory.mkdir(parents=True, exist_ok=True)
+
+    listCopiedPaths: list[Path] = []
+    try:
+        for objPath in listOldPaths:
+            objCopyPath = objBackupDirectory / objPath.name
+            shutil.copy2(objPath, objCopyPath)
+            listCopiedPaths.append(objCopyPath)
+            if not objCopyPath.is_file() or objCopyPath.stat().st_size != objPath.stat().st_size:
+                raise ValueError(
+                    "%TEMP%へのバックアップ検証に失敗しました。Path = " + str(objPath)
+                )
+            objProgress.temp_copies += 1
+    except Exception:
+        for objCopiedPath in listCopiedPaths:
+            if objCopiedPath.exists():
+                objCopiedPath.unlink()
+        raise
+
+    listRenames: list[tuple[Path, Path]] = []
+    try:
+        for objPath in listOldPaths:
+            pszTimestamp: str = datetime.fromtimestamp(objPath.stat().st_mtime).strftime(
+                "%Y%m%d%H%M%S"
+            )
+            objArchivePath = get_unique_path(
+                objPath.with_name(objPath.stem + "_" + pszTimestamp + objPath.suffix)
+            )
+            objPath.rename(objArchivePath)
+            listRenames.append((objPath, objArchivePath))
+            objProgress.renamed_files += 1
+    except Exception:
+        for objOriginalPath, objArchivePath in reversed(listRenames):
+            try:
+                objArchivePath.rename(objOriginalPath)
+                objProgress.restore_successes += 1
+            except OSError:
+                objProgress.restore_failures += 1
+                objProgress.failed_restore_paths.append(str(objArchivePath))
+        raise
+    return [objArchivePath for _, objArchivePath in listRenames]
+
+
 def format_product_processing_error(
     pszDetail: str, objProgress: ProductProcessingProgress
 ) -> str:
@@ -2380,6 +2454,23 @@ def process_product_step0007_files(
                 dictCenterPaths["step0006.tsv"]
             )
             validate_step0005_tables_match(listExcelRows, listTsvRows)
+            if len(listExcelRows) == 2:
+                listArchivedPaths = archive_skipped_step0007_files(
+                    dictCenterPaths, objProgress
+                )
+                pszWarning = (
+                    f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」は'
+                    + "処理0006に対象データがないため、処理0007 XLSX・TSVを作成しませんでした。"
+                )
+                if listArchivedPaths:
+                    pszWarning += (
+                        " 古い処理0007ファイルは%TEMP%へバックアップし、"
+                        + "最終更新日時付きファイル名へ変更しました。"
+                    )
+                if len(listArchivedPaths) == 1:
+                    pszWarning += " 古い処理0007 XLSX・TSVは片方だけ存在していました。"
+                listWarnings.append(pszWarning)
+                continue
             listRows, iKeptStoreCount, _ = build_product_step0007_rows(
                 listExcelRows, pszCenterName
             )
