@@ -125,6 +125,7 @@ class ProductProcessingProgress:
 
     def __init__(self) -> None:
         self.process_name: str = "処理0003"
+        self.completed_process_name: str = "なし"
         self.current_product: int = 0
         self.total_products: int = 0
         self.apex_code: str = "なし"
@@ -2032,6 +2033,8 @@ def format_product_processing_error(
         + "\nAPEX品番: " + objProgress.apex_code
         + "\n商品名: " + objProgress.product_name
         + "\n配送センター: " + objProgress.center_name
+        + "\n正常に完了した最終処理: " + objProgress.completed_process_name
+        + "\n前処理までの正式出力: 保持"
         + "\n計画済み出力数: " + str(objProgress.planned_outputs)
         + "\n一時作成済み出力数: " + str(objProgress.temporary_outputs)
         + "\n検証済み出力数: " + str(objProgress.validated_outputs)
@@ -2086,7 +2089,7 @@ def build_step0005_table_rows(listStep0005Rows: list[list[object]]) -> list[list
 def commit_product_output_set(
     dictTemporaryOutputs: dict[Path, Path], objProgress: ProductProcessingProgress
 ) -> None:
-    """全商品の出力を一括確定し、失敗時は確定済み出力を復旧します。"""
+    """1つの処理段階の出力を一括確定し、失敗時は同段階の出力を復旧します。"""
     dictBackups: dict[Path, Path] = {}
     listReplaced: list[Path] = []
     try:
@@ -2118,6 +2121,269 @@ def commit_product_output_set(
                 objPath.unlink()
 
 
+def process_product_step0003_files(
+    objPlan: ProductFilePlan,
+    objStep0002ExcelPath: Path,
+    objStep0002TsvPath: Path,
+    objProgress: ProductProcessingProgress,
+) -> tuple[Path, Path]:
+    """処理0002の正式な両出力から商品別処理0003を作成して確定します。"""
+    listExcelRows = read_step0002_excel_rows(objStep0002ExcelPath)
+    listTsvRows = read_step0002_tsv_rows(objStep0002TsvPath)
+    validate_step0002_outputs_match(listExcelRows, listTsvRows)
+    iProductIndex: int = objPlan.source_row - 2
+    if iProductIndex < 0 or iProductIndex >= len(listExcelRows):
+        raise ValueError("処理0002の商品行が見つかりません。")
+    if listExcelRows[iProductIndex] != objPlan.step0002_row:
+        raise ValueError("処理0002の商品情報が出力計画と一致しません。")
+
+    objExcelPath = objPlan.output_paths["step0003.xlsx"]
+    objTsvPath = objPlan.output_paths["step0003.tsv"]
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        objExcelTemp = create_product_temporary_output(
+            objExcelPath, dictTemporaryOutputs, objProgress
+        )
+        objTsvTemp = create_product_temporary_output(
+            objTsvPath, dictTemporaryOutputs, objProgress
+        )
+        listRows = build_step0003_rows([listExcelRows[iProductIndex]])
+        save_step0003_excel_template(objExcelTemp, listRows)
+        save_step0003_tsv_template(objTsvTemp, listRows)
+        validate_saved_step0003_pair(objExcelTemp, objTsvTemp, "step0003")
+        objProgress.validated_outputs += 2
+        commit_product_output_set(dictTemporaryOutputs, objProgress)
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    return objExcelPath, objTsvPath
+
+
+def process_product_step0004_files(
+    objPlan: ProductFilePlan,
+    objStep0003ExcelPath: Path,
+    objStep0003TsvPath: Path,
+    objStartMonday: date,
+    objProgress: ProductProcessingProgress,
+) -> tuple[Path, Path]:
+    """商品別処理0003の正式な両出力から処理0004を作成して確定します。"""
+    listExcelRows = read_step0002_excel_rows(objStep0003ExcelPath, "step0003")
+    listTsvRows = read_step0002_tsv_rows(objStep0003TsvPath, "step0003")
+    validate_step0002_outputs_match(listExcelRows, listTsvRows, "step0003")
+    listRows = build_step0004_rows(listExcelRows, objStartMonday)
+    objExcelPath = objPlan.output_paths["step0004.xlsx"]
+    objTsvPath = objPlan.output_paths["step0004.tsv"]
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        objExcelTemp = create_product_temporary_output(
+            objExcelPath, dictTemporaryOutputs, objProgress
+        )
+        objTsvTemp = create_product_temporary_output(
+            objTsvPath, dictTemporaryOutputs, objProgress
+        )
+        save_step0004_excel_template(objExcelTemp, listRows)
+        save_step0004_tsv_template(objTsvTemp, listRows)
+        validate_saved_step0003_pair(objExcelTemp, objTsvTemp, "step0004")
+        objProgress.validated_outputs += 2
+        commit_product_output_set(dictTemporaryOutputs, objProgress)
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    return objExcelPath, objTsvPath
+
+
+def process_product_step0005_files(
+    pszInputFileFullPath: str,
+    objPlan: ProductFilePlan,
+    objStep0004ExcelPath: Path,
+    objStep0004TsvPath: Path,
+    objStartMonday: date,
+    objProgress: ProductProcessingProgress,
+) -> tuple[Path, Path]:
+    """商品別処理0004の正式な両出力から処理0005を作成して確定します。"""
+    listExcelRows = read_step0002_excel_rows(objStep0004ExcelPath, "step0004")
+    listTsvRows = read_step0002_tsv_rows(objStep0004TsvPath, "step0004")
+    validate_step0002_outputs_match(listExcelRows, listTsvRows, "step0004")
+    pszProductSeedPath: str = str(
+        Path(pszInputFileFullPath).with_name(
+            Path(pszInputFileFullPath).stem + "_" + objPlan.file_identity
+            + Path(pszInputFileFullPath).suffix
+        )
+    )
+    listRetainedRows, _, iRemovedCount = select_step0005_product_rows(
+        listExcelRows, pszProductSeedPath, objStartMonday
+    )
+    listRows = build_step0005_rows(
+        listRetainedRows, pszProductSeedPath, objStartMonday
+    )
+    objExcelPath = objPlan.output_paths["step0005.xlsx"]
+    objTsvPath = objPlan.output_paths["step0005.tsv"]
+    objWarningPath = objPlan.output_paths["step0005_warning.txt"]
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        objExcelTemp = create_product_temporary_output(
+            objExcelPath, dictTemporaryOutputs, objProgress
+        )
+        objTsvTemp = create_product_temporary_output(
+            objTsvPath, dictTemporaryOutputs, objProgress
+        )
+        save_step0005_excel_template(objExcelTemp, listRows)
+        save_step0005_tsv_template(objTsvTemp, listRows)
+        validate_step0005_tables_match(
+            read_step0005_excel_table(objExcelTemp),
+            read_step0005_tsv_table(objTsvTemp),
+        )
+        objProgress.validated_outputs += 2
+        if iRemovedCount == 1:
+            objWarningTemp = create_product_temporary_output(
+                objWarningPath, dictTemporaryOutputs, objProgress
+            )
+            write_warning_text(
+                str(objWarningTemp),
+                "処理結果: 警告\n入力ファイル: "
+                + os.path.abspath(pszInputFileFullPath)
+                + "\n発生した処理: 旭注文テンプレート処理0005\nAPEX品番: "
+                + objPlan.apex_code
+                + "\n商品名: "
+                + objPlan.product_name
+                + "\n警告内容: 商品削除抽選の結果、この商品が削除されました。\n"
+                + "商品削除確率: " + str(PRODUCT_DELETE_PROBABILITY)
+                + " (" + str(PRODUCT_DELETE_PROBABILITY * 100) + "%)"
+                + "\n入力商品数: 1\n残存商品数: 0\n削除商品数: 1",
+            )
+            objProgress.validated_outputs += 1
+        commit_product_output_set(dictTemporaryOutputs, objProgress)
+        if iRemovedCount != 1 and objWarningPath.exists():
+            objWarningPath.unlink()
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    return objExcelPath, objTsvPath
+
+
+def process_product_step0006_files(
+    objPlan: ProductFilePlan,
+    objStep0005ExcelPath: Path,
+    objStep0005TsvPath: Path,
+    listMappings: list[tuple[str, str, str]],
+    objProgress: ProductProcessingProgress,
+) -> tuple[Path, Path, list[str], list[str]]:
+    """商品別処理0005の正式な両出力から処理0006を作成して確定します。"""
+    listExcelRows = read_step0005_excel_table(objStep0005ExcelPath)
+    listTsvRows = read_step0005_tsv_table(objStep0005TsvPath)
+    validate_step0005_tables_match(listExcelRows, listTsvRows)
+    dictCenterCodes: dict[str, set[str]] = {}
+    for pszCenter, pszCode, _ in listMappings:
+        dictCenterCodes.setdefault(pszCenter, set()).add(pszCode)
+    objExcelPath = objPlan.output_paths["step0006.xlsx"]
+    objTsvPath = objPlan.output_paths["step0006.tsv"]
+    listWarnings: list[str] = []
+    listOutputCenters: list[str] = []
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        listAllStoreRows = build_step0006_all_stores_rows(listExcelRows, listMappings)
+        objExcelTemp = create_product_temporary_output(
+            objExcelPath, dictTemporaryOutputs, objProgress
+        )
+        objTsvTemp = create_product_temporary_output(
+            objTsvPath, dictTemporaryOutputs, objProgress
+        )
+        save_step0006_excel_template(objExcelTemp, listAllStoreRows)
+        save_step0006_tsv_template(objTsvTemp, listAllStoreRows)
+        validate_step0005_tables_match(
+            read_step0005_excel_table(objExcelTemp),
+            read_step0005_tsv_table(objTsvTemp),
+        )
+        objProgress.validated_outputs += 2
+        for pszCenterName, setCodes in dictCenterCodes.items():
+            objProgress.center_name = pszCenterName
+            listCenterRows = build_step0006_center_rows(listExcelRows, setCodes)
+            if len(listCenterRows[0]) == len(STEP0002_HEADERS):
+                listWarnings.append(
+                    f'警告: 配送センター「{pszCenterName}」の店舗コード列は処理0005にありません。'
+                )
+                continue
+            if not center_has_order_quantity(listCenterRows):
+                listWarnings.append(
+                    f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」の'
+                    + "店舗数量はすべて空欄ですが、XLSX・TSVを作成しました。"
+                )
+            dictCenterPaths = objPlan.center_output_paths[pszCenterName]
+            objCenterExcelTemp = create_product_temporary_output(
+                dictCenterPaths["step0006.xlsx"], dictTemporaryOutputs, objProgress
+            )
+            objCenterTsvTemp = create_product_temporary_output(
+                dictCenterPaths["step0006.tsv"], dictTemporaryOutputs, objProgress
+            )
+            save_step0006_excel_template(objCenterExcelTemp, listCenterRows)
+            save_step0006_tsv_template(objCenterTsvTemp, listCenterRows)
+            validate_step0005_tables_match(
+                read_step0005_excel_table(objCenterExcelTemp),
+                read_step0005_tsv_table(objCenterTsvTemp),
+            )
+            objProgress.validated_outputs += 2
+            listOutputCenters.append(pszCenterName)
+        commit_product_output_set(dictTemporaryOutputs, objProgress)
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    objProgress.center_name = "なし"
+    return objExcelPath, objTsvPath, listOutputCenters, listWarnings
+
+
+def process_product_step0007_files(
+    objPlan: ProductFilePlan,
+    listCenterNames: list[str],
+    objProgress: ProductProcessingProgress,
+) -> list[str]:
+    """配送センター別処理0006の正式な両出力から処理0007を作成して確定します。"""
+    listWarnings: list[str] = []
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        for pszCenterName in listCenterNames:
+            objProgress.center_name = pszCenterName
+            dictCenterPaths = objPlan.center_output_paths[pszCenterName]
+            listExcelRows = read_step0005_excel_table(
+                dictCenterPaths["step0006.xlsx"]
+            )
+            listTsvRows = read_step0005_tsv_table(
+                dictCenterPaths["step0006.tsv"]
+            )
+            validate_step0005_tables_match(listExcelRows, listTsvRows)
+            listRows, iKeptCount, _ = build_step0007_rows(
+                listExcelRows, pszCenterName
+            )
+            if iKeptCount == 0:
+                listWarnings.append(
+                    f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」には'
+                    + "発注がありませんが、ヘッダー2行のXLSX・TSVを作成しました。"
+                )
+            objExcelTemp = create_product_temporary_output(
+                dictCenterPaths["step0007.xlsx"], dictTemporaryOutputs, objProgress
+            )
+            objTsvTemp = create_product_temporary_output(
+                dictCenterPaths["step0007.tsv"], dictTemporaryOutputs, objProgress
+            )
+            save_step0006_excel_template(objExcelTemp, listRows)
+            save_step0006_tsv_template(objTsvTemp, listRows)
+            validate_step0005_tables_match(
+                read_step0005_excel_table(objExcelTemp),
+                read_step0005_tsv_table(objTsvTemp),
+            )
+            objProgress.validated_outputs += 2
+        commit_product_output_set(dictTemporaryOutputs, objProgress)
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    objProgress.center_name = "なし"
+    return listWarnings
+
+
 def process_product_file_pipeline(
     pszInputFileFullPath: str,
     objStep0002ExcelPath: Path,
@@ -2125,12 +2391,9 @@ def process_product_file_pipeline(
     objStartMonday: date,
     objMappingPath: Path,
 ) -> tuple[list[ProductFilePlan], list[str], ProductProcessingProgress]:
-    """処理0002から商品別Step0003～Step0007の全出力を作成します。"""
+    """各Stepの正式なXLSX／TSVを次Stepが読み込む商品別処理を制御します。"""
     objProgress = ProductProcessingProgress()
-    listArchiveRenames: list[tuple[Path, Path]] = []
-    dictTemporaryOutputs: dict[Path, Path] = {}
     listWarnings: list[str] = []
-    setWarningPathsToRemove: set[Path] = set()
     try:
         listExcelRows = read_step0002_excel_rows(objStep0002ExcelPath)
         listTsvRows = read_step0002_tsv_rows(objStep0002TsvPath)
@@ -2145,168 +2408,60 @@ def process_product_file_pipeline(
             + sum(len(dictPaths) for dictPaths in objPlan.center_output_paths.values())
             for objPlan in listPlans
         )
-        listArchiveRenames = archive_stale_step0003_files(
+        archive_stale_step0003_files(
             pszInputFileFullPath, listPlans, objProgress
         )
-        dictCenterCodes: dict[str, set[str]] = {}
-        for pszCenter, pszCode, _ in listMappings:
-            dictCenterCodes.setdefault(pszCenter, set()).add(pszCode)
-
         for iProduct, objPlan in enumerate(listPlans, start=1):
             objProgress.current_product = iProduct
             objProgress.apex_code = objPlan.apex_code
             objProgress.product_name = objPlan.product_name
             objProgress.center_name = "なし"
+            objProgress.completed_process_name = "なし"
             objProgress.process_name = "処理0003"
-            listStep0003Rows = build_step0003_rows([objPlan.step0002_row])
-            objStep0003ExcelTemp = create_product_temporary_output(
-                objPlan.output_paths["step0003.xlsx"], dictTemporaryOutputs, objProgress
+            objStep0003ExcelPath, objStep0003TsvPath = process_product_step0003_files(
+                objPlan, objStep0002ExcelPath, objStep0002TsvPath, objProgress
             )
-            objStep0003TsvTemp = create_product_temporary_output(
-                objPlan.output_paths["step0003.tsv"], dictTemporaryOutputs, objProgress
-            )
-            save_step0003_excel_template(objStep0003ExcelTemp, listStep0003Rows)
-            save_step0003_tsv_template(objStep0003TsvTemp, listStep0003Rows)
-            validate_saved_step0003_pair(objStep0003ExcelTemp, objStep0003TsvTemp, "step0003")
-            objProgress.validated_outputs += 2
+            objProgress.completed_process_name = "処理0003"
 
             objProgress.process_name = "処理0004"
-            listStep0004Rows = build_step0004_rows(listStep0003Rows, objStartMonday)
-            objStep0004ExcelTemp = create_product_temporary_output(
-                objPlan.output_paths["step0004.xlsx"], dictTemporaryOutputs, objProgress
+            objStep0004ExcelPath, objStep0004TsvPath = process_product_step0004_files(
+                objPlan,
+                objStep0003ExcelPath,
+                objStep0003TsvPath,
+                objStartMonday,
+                objProgress,
             )
-            objStep0004TsvTemp = create_product_temporary_output(
-                objPlan.output_paths["step0004.tsv"], dictTemporaryOutputs, objProgress
-            )
-            save_step0004_excel_template(objStep0004ExcelTemp, listStep0004Rows)
-            save_step0004_tsv_template(objStep0004TsvTemp, listStep0004Rows)
-            validate_saved_step0003_pair(objStep0004ExcelTemp, objStep0004TsvTemp, "step0004")
-            objProgress.validated_outputs += 2
+            objProgress.completed_process_name = "処理0004"
 
             objProgress.process_name = "処理0005"
-            pszProductSeedPath: str = str(
-                Path(pszInputFileFullPath).with_name(
-                    Path(pszInputFileFullPath).stem + "_" + objPlan.file_identity
-                    + Path(pszInputFileFullPath).suffix
-                )
+            objStep0005ExcelPath, objStep0005TsvPath = process_product_step0005_files(
+                pszInputFileFullPath,
+                objPlan,
+                objStep0004ExcelPath,
+                objStep0004TsvPath,
+                objStartMonday,
+                objProgress,
             )
-            listRetainedRows, iKeptCount, iRemovedCount = select_step0005_product_rows(
-                listStep0004Rows, pszProductSeedPath, objStartMonday
-            )
-            listStep0005Rows = build_step0005_rows(
-                listRetainedRows, pszProductSeedPath, objStartMonday
-            )
-            listStep0005TableRows = build_step0005_table_rows(listStep0005Rows)
-            objStep0005ExcelTemp = create_product_temporary_output(
-                objPlan.output_paths["step0005.xlsx"], dictTemporaryOutputs, objProgress
-            )
-            objStep0005TsvTemp = create_product_temporary_output(
-                objPlan.output_paths["step0005.tsv"], dictTemporaryOutputs, objProgress
-            )
-            save_step0005_excel_template(objStep0005ExcelTemp, listStep0005Rows)
-            save_step0005_tsv_template(objStep0005TsvTemp, listStep0005Rows)
-            validate_step0005_tables_match(
-                read_step0005_excel_table(objStep0005ExcelTemp),
-                read_step0005_tsv_table(objStep0005TsvTemp),
-            )
-            objProgress.validated_outputs += 2
-            objWarningPath = objPlan.output_paths["step0005_warning.txt"]
-            if iRemovedCount == 1:
-                objWarningTemp = create_product_temporary_output(
-                    objWarningPath, dictTemporaryOutputs, objProgress
-                )
-                write_warning_text(
-                    str(objWarningTemp),
-                    "処理結果: 警告\n入力ファイル: "
-                    + os.path.abspath(pszInputFileFullPath)
-                    + "\n発生した処理: 旭注文テンプレート処理0005\nAPEX品番: "
-                    + objPlan.apex_code
-                    + "\n商品名: "
-                    + objPlan.product_name
-                    + "\n警告内容: 商品削除抽選の結果、この商品が削除されました。\n"
-                    + "商品削除確率: " + str(PRODUCT_DELETE_PROBABILITY)
-                    + " (" + str(PRODUCT_DELETE_PROBABILITY * 100) + "%)"
-                    + "\n入力商品数: 1\n残存商品数: 0\n削除商品数: 1",
-                )
-                objProgress.validated_outputs += 1
-            else:
-                setWarningPathsToRemove.add(objWarningPath)
+            objProgress.completed_process_name = "処理0005"
 
             objProgress.process_name = "処理0006"
-            listAllStoreRows = build_step0006_all_stores_rows(
-                listStep0005TableRows, listMappings
+            _, _, listCenterNames, listStep0006Warnings = process_product_step0006_files(
+                objPlan,
+                objStep0005ExcelPath,
+                objStep0005TsvPath,
+                listMappings,
+                objProgress,
             )
-            objStep0006ExcelTemp = create_product_temporary_output(
-                objPlan.output_paths["step0006.xlsx"], dictTemporaryOutputs, objProgress
-            )
-            objStep0006TsvTemp = create_product_temporary_output(
-                objPlan.output_paths["step0006.tsv"], dictTemporaryOutputs, objProgress
-            )
-            save_step0006_excel_template(objStep0006ExcelTemp, listAllStoreRows)
-            save_step0006_tsv_template(objStep0006TsvTemp, listAllStoreRows)
-            validate_step0005_tables_match(
-                read_step0005_excel_table(objStep0006ExcelTemp),
-                read_step0005_tsv_table(objStep0006TsvTemp),
-            )
-            objProgress.validated_outputs += 2
+            listWarnings.extend(listStep0006Warnings)
+            objProgress.completed_process_name = "処理0006"
 
-            for pszCenterName, setCodes in dictCenterCodes.items():
-                objProgress.process_name = "処理0006"
-                objProgress.center_name = pszCenterName
-                listCenterRows = build_step0006_center_rows(listStep0005TableRows, setCodes)
-                if len(listCenterRows[0]) == len(STEP0002_HEADERS):
-                    listWarnings.append(
-                        f'警告: 配送センター「{pszCenterName}」の店舗コード列は処理0005にありません。'
-                    )
-                    continue
-                if not center_has_order_quantity(listCenterRows):
-                    listWarnings.append(
-                        f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」の'
-                        + "店舗数量はすべて空欄ですが、XLSX・TSVを作成しました。"
-                    )
-                dictCenterPaths = objPlan.center_output_paths[pszCenterName]
-                objCenterExcelTemp = create_product_temporary_output(
-                    dictCenterPaths["step0006.xlsx"], dictTemporaryOutputs, objProgress
+            objProgress.process_name = "処理0007"
+            listWarnings.extend(
+                process_product_step0007_files(
+                    objPlan, listCenterNames, objProgress
                 )
-                objCenterTsvTemp = create_product_temporary_output(
-                    dictCenterPaths["step0006.tsv"], dictTemporaryOutputs, objProgress
-                )
-                save_step0006_excel_template(objCenterExcelTemp, listCenterRows)
-                save_step0006_tsv_template(objCenterTsvTemp, listCenterRows)
-                validate_step0005_tables_match(
-                    read_step0005_excel_table(objCenterExcelTemp),
-                    read_step0005_tsv_table(objCenterTsvTemp),
-                )
-                objProgress.validated_outputs += 2
-
-                objProgress.process_name = "処理0007"
-                listStep0007Rows, iStep0007Kept, _ = build_step0007_rows(
-                    listCenterRows, pszCenterName
-                )
-                if iStep0007Kept == 0:
-                    listWarnings.append(
-                        f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」には'
-                        + "発注がありませんが、ヘッダー2行のXLSX・TSVを作成しました。"
-                    )
-                objStep0007ExcelTemp = create_product_temporary_output(
-                    dictCenterPaths["step0007.xlsx"], dictTemporaryOutputs, objProgress
-                )
-                objStep0007TsvTemp = create_product_temporary_output(
-                    dictCenterPaths["step0007.tsv"], dictTemporaryOutputs, objProgress
-                )
-                save_step0006_excel_template(objStep0007ExcelTemp, listStep0007Rows)
-                save_step0006_tsv_template(objStep0007TsvTemp, listStep0007Rows)
-                validate_step0005_tables_match(
-                    read_step0005_excel_table(objStep0007ExcelTemp),
-                    read_step0005_tsv_table(objStep0007TsvTemp),
-                )
-                objProgress.validated_outputs += 2
-            objProgress.center_name = "なし"
-
-        commit_product_output_set(dictTemporaryOutputs, objProgress)
-        for objWarningPath in setWarningPathsToRemove:
-            if objWarningPath.exists():
-                objWarningPath.unlink()
+            )
+            objProgress.completed_process_name = "処理0007"
         if objProgress.temp_backup_directory != "なし":
             objBackupDirectory = Path(objProgress.temp_backup_directory)
             print("Temp Backup Directory: " + str(objBackupDirectory))
@@ -2317,18 +2472,6 @@ def process_product_file_pipeline(
             )
         return listPlans, listWarnings, objProgress
     except Exception as objException:
-        for objTemporaryPath in dictTemporaryOutputs.values():
-            if objTemporaryPath.exists():
-                objTemporaryPath.unlink()
-        for objOriginalPath, objArchivePath in reversed(listArchiveRenames):
-            if not objArchivePath.exists() or objOriginalPath.exists():
-                continue
-            try:
-                objArchivePath.rename(objOriginalPath)
-                objProgress.restore_successes += 1
-            except OSError:
-                objProgress.restore_failures += 1
-                objProgress.failed_restore_paths.append(str(objArchivePath))
         pszDetail = format_product_processing_error(str(objException), objProgress)
         if objProgress.process_name == "処理0007":
             raise Step0007Error(pszDetail) from objException
