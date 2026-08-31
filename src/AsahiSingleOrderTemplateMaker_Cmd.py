@@ -1755,6 +1755,32 @@ def build_step0007_rows(
     return listOutputRows, iKeptProductCount, iRemovedProductCount
 
 
+def build_product_step0007_rows(
+    listStep0006Rows: list[list[str]], pszCenterName: str
+) -> tuple[list[list[str]], int, int]:
+    """商品別処理0006から発注のある店舗列だけを残した処理0007を構築します。"""
+    validate_step0007_product_groups(listStep0006Rows, pszCenterName)
+    if len(listStep0006Rows) != 2 + len(WEEKDAYS):
+        raise ValueError(
+            f'配送センター「{pszCenterName}」の商品別step0006が9行ではありません。'
+        )
+    listDataRows: list[list[str]] = listStep0006Rows[2:]
+    listOutputColumnIndexes: list[int] = list(range(len(STEP0002_HEADERS)))
+    iKeptStoreCount: int = 0
+    iRemovedStoreCount: int = 0
+    for iColumn in range(len(STEP0002_HEADERS), len(listStep0006Rows[0])):
+        if any(listRow[iColumn].strip() != "" for listRow in listDataRows):
+            listOutputColumnIndexes.append(iColumn)
+            iKeptStoreCount += 1
+        else:
+            iRemovedStoreCount += 1
+    listOutputRows: list[list[str]] = [
+        [listRow[iColumn] for iColumn in listOutputColumnIndexes]
+        for listRow in listStep0006Rows
+    ]
+    return listOutputRows, iKeptStoreCount, iRemovedStoreCount
+
+
 def get_step0007_output_path(objStep0006Path: Path) -> Path:
     """配送センター別step0006パスからstep0007パスを作ります。"""
     pszMarker: str = "_step0006_"
@@ -2354,13 +2380,14 @@ def process_product_step0007_files(
                 dictCenterPaths["step0006.tsv"]
             )
             validate_step0005_tables_match(listExcelRows, listTsvRows)
-            listRows, iKeptCount, _ = build_step0007_rows(
+            listRows, iKeptStoreCount, _ = build_product_step0007_rows(
                 listExcelRows, pszCenterName
             )
-            if iKeptCount == 0:
+            if iKeptStoreCount == 0:
                 listWarnings.append(
                     f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」には'
-                    + "発注がありませんが、ヘッダー2行のXLSX・TSVを作成しました。"
+                    + "発注がある店舗がないため、A～N列と月曜日～日曜日7行だけの"
+                    + "XLSX・TSVを作成しました。"
                 )
             objExcelTemp = create_product_temporary_output(
                 dictCenterPaths["step0007.xlsx"], dictTemporaryOutputs, objProgress
@@ -2370,10 +2397,12 @@ def process_product_step0007_files(
             )
             save_step0006_excel_template(objExcelTemp, listRows)
             save_step0006_tsv_template(objTsvTemp, listRows)
+            listSavedExcelRows = read_step0005_excel_table(objExcelTemp)
+            listSavedTsvRows = read_step0005_tsv_table(objTsvTemp)
             validate_step0005_tables_match(
-                read_step0005_excel_table(objExcelTemp),
-                read_step0005_tsv_table(objTsvTemp),
+                listSavedExcelRows, listSavedTsvRows
             )
+            validate_step0005_tables_match(listRows, listSavedExcelRows)
             objProgress.validated_outputs += 2
         commit_product_output_set(dictTemporaryOutputs, objProgress)
     finally:
