@@ -132,9 +132,12 @@ class ProductProcessingProgress:
         self.product_name: str = "なし"
         self.center_name: str = "なし"
         self.planned_outputs: int = 0
+        self.actual_output_targets: int = 0
         self.temporary_outputs: int = 0
         self.validated_outputs: int = 0
         self.committed_outputs: int = 0
+        self.skipped_centers: int = 0
+        self.warning_files: int = 0
         self.stale_files: int = 0
         self.temp_copies: int = 0
         self.renamed_files: int = 0
@@ -1937,6 +1940,12 @@ def build_product_file_plans(
                     dictCenterPaths[pszStep + pszSuffix] = objInputPath.with_name(
                         objInputPath.stem + "_" + pszStep + "_" + pszCenterStem + pszSuffix
                     )
+            dictCenterPaths["step0007_warning.txt"] = objInputPath.with_name(
+                objInputPath.stem
+                + "_step0007_"
+                + pszCenterStem
+                + "_warning.txt"
+            )
             objPlan.center_output_paths[pszCenterName] = dictCenterPaths
         for objOutputPath in [
             *objPlan.output_paths.values(),
@@ -2049,14 +2058,12 @@ def archive_stale_step0003_files(
     return listRenames
 
 
-def archive_skipped_step0007_files(
-    dictCenterPaths: dict[str, Path], objProgress: ProductProcessingProgress
+def archive_existing_product_files(
+    listCandidatePaths: list[Path], objProgress: ProductProcessingProgress
 ) -> list[Path]:
-    """対象データがない配送センターの古いStep0007を退避して名前を変更します。"""
+    """既存の商品別ファイルを%TEMP%へコピーして最終更新日時付きへ変更します。"""
     listOldPaths: list[Path] = [
-        dictCenterPaths["step0007" + pszSuffix]
-        for pszSuffix in (".xlsx", ".tsv")
-        if dictCenterPaths["step0007" + pszSuffix].is_file()
+        objPath for objPath in listCandidatePaths if objPath.is_file()
     ]
     if not listOldPaths:
         return []
@@ -2123,6 +2130,19 @@ def archive_skipped_step0007_files(
     return [objArchivePath for _, objArchivePath in listRenames]
 
 
+def archive_skipped_step0007_files(
+    dictCenterPaths: dict[str, Path], objProgress: ProductProcessingProgress
+) -> list[Path]:
+    """対象データがない配送センターの古いStep0007を退避して名前を変更します。"""
+    return archive_existing_product_files(
+        [
+            dictCenterPaths["step0007.xlsx"],
+            dictCenterPaths["step0007.tsv"],
+        ],
+        objProgress,
+    )
+
+
 def format_product_processing_error(
     pszDetail: str, objProgress: ProductProcessingProgress
 ) -> str:
@@ -2135,10 +2155,13 @@ def format_product_processing_error(
         + "\n配送センター: " + objProgress.center_name
         + "\n正常に完了した最終処理: " + objProgress.completed_process_name
         + "\n前処理までの正式出力: 保持"
-        + "\n計画済み出力数: " + str(objProgress.planned_outputs)
+        + "\n最大予定出力数: " + str(objProgress.planned_outputs)
+        + "\n実際の出力対象数: " + str(objProgress.actual_output_targets)
         + "\n一時作成済み出力数: " + str(objProgress.temporary_outputs)
         + "\n検証済み出力数: " + str(objProgress.validated_outputs)
         + "\n確定済み出力数: " + str(objProgress.committed_outputs)
+        + "\n正常スキップ配送センター数: " + str(objProgress.skipped_centers)
+        + "\n警告ファイル数: " + str(objProgress.warning_files)
         + "\n古いファイル検出数: " + str(objProgress.stale_files)
         + "\n%TEMP%コピー済み数: " + str(objProgress.temp_copies)
         + "\nリネーム済み数: " + str(objProgress.renamed_files)
@@ -2162,7 +2185,8 @@ def create_product_temporary_output(
     """商品別出力の一時パスを作成し、進行状況へ登録します。"""
     objTemporaryPath = create_temporary_path(objFinalPath, objFinalPath.suffix)
     dictTemporaryOutputs[objFinalPath] = objTemporaryPath
-    objProgress.temporary_outputs += 1
+    if objFinalPath.suffix.lower() != ".txt":
+        objProgress.temporary_outputs += 1
     return objTemporaryPath
 
 
@@ -2201,7 +2225,10 @@ def commit_product_output_set(
         for objOutputPath, objTemporaryPath in dictTemporaryOutputs.items():
             os.replace(objTemporaryPath, objOutputPath)
             listReplaced.append(objOutputPath)
-            objProgress.committed_outputs += 1
+            if objOutputPath.suffix.lower() == ".txt":
+                objProgress.warning_files += 1
+            else:
+                objProgress.committed_outputs += 1
     except Exception:
         for objOutputPath in reversed(listReplaced):
             try:
@@ -2214,6 +2241,10 @@ def commit_product_output_set(
             except OSError:
                 objProgress.restore_failures += 1
                 objProgress.failed_restore_paths.append(str(objOutputPath))
+            if objOutputPath.suffix.lower() == ".txt":
+                objProgress.warning_files -= 1
+            else:
+                objProgress.committed_outputs -= 1
         raise
     finally:
         for objPath in [*dictBackups.values(), *dictTemporaryOutputs.values()]:
@@ -2353,7 +2384,6 @@ def process_product_step0005_files(
                 + " (" + str(PRODUCT_DELETE_PROBABILITY * 100) + "%)"
                 + "\n入力商品数: 1\n残存商品数: 0\n削除商品数: 1",
             )
-            objProgress.validated_outputs += 1
         commit_product_output_set(dictTemporaryOutputs, objProgress)
         if iRemovedCount != 1 and objWarningPath.exists():
             objWarningPath.unlink()
@@ -2405,6 +2435,7 @@ def process_product_step0006_files(
                 listWarnings.append(
                     f'警告: 配送センター「{pszCenterName}」の店舗コード列は処理0005にありません。'
                 )
+                objProgress.actual_output_targets -= 4
                 continue
             if not center_has_order_quantity(listCenterRows):
                 listWarnings.append(
@@ -2435,7 +2466,58 @@ def process_product_step0006_files(
     return objExcelPath, objTsvPath, listOutputCenters, listWarnings
 
 
+def create_step0007_skip_warning(
+    pszInputFileFullPath: str,
+    objPlan: ProductFilePlan,
+    pszCenterName: str,
+    iStep0006Rows: int,
+    listArchivedPaths: list[Path],
+    dictTemporaryOutputs: dict[Path, Path],
+    objProgress: ProductProcessingProgress,
+) -> Path:
+    """処理0007を正常スキップした商品×配送センターの警告を一時作成します。"""
+    objWarningPath = objPlan.center_output_paths[pszCenterName][
+        "step0007_warning.txt"
+    ]
+    objWarningTemp = create_product_temporary_output(
+        objWarningPath, dictTemporaryOutputs, objProgress
+    )
+    if iStep0006Rows == 2:
+        pszReason = "処理0006がヘッダー2行だけで対象商品データがないため"
+    else:
+        pszReason = (
+            "処理0006の月曜日～日曜日データは存在しますが、"
+            + "発注がある店舗がないため"
+        )
+    write_warning_text(
+        str(objWarningTemp),
+        "処理結果: 警告\n入力ファイル: "
+        + os.path.abspath(pszInputFileFullPath)
+        + "\n発生した処理: 旭注文テンプレート処理0007\nAPEX品番: "
+        + objPlan.apex_code
+        + "\n商品名: "
+        + objPlan.product_name
+        + "\n配送センター: "
+        + pszCenterName
+        + "\n警告内容: "
+        + pszReason
+        + "、処理0007 XLSX・TSVを作成しませんでした。"
+        + "\n処理0006行数: "
+        + str(iStep0006Rows)
+        + "\n発注あり店舗数: 0"
+        + "\n処理0007 XLSX: 作成なし"
+        + "\n処理0007 TSV: 作成なし"
+        + "\n処理結果: 次の配送センターへ継続"
+        + "\n古い処理0007バックアップ: "
+        + ("あり" if listArchivedPaths else "なし")
+        + "\n%TEMP%バックアップ: "
+        + objProgress.temp_backup_directory,
+    )
+    return objWarningPath
+
+
 def process_product_step0007_files(
+    pszInputFileFullPath: str,
     objPlan: ProductFilePlan,
     listCenterNames: list[str],
     objProgress: ProductProcessingProgress,
@@ -2443,6 +2525,7 @@ def process_product_step0007_files(
     """配送センター別処理0006の正式な両出力から処理0007を作成して確定します。"""
     listWarnings: list[str] = []
     dictTemporaryOutputs: dict[Path, Path] = {}
+    setOldWarningPathsToArchive: set[Path] = set()
     try:
         for pszCenterName in listCenterNames:
             objProgress.center_name = pszCenterName
@@ -2469,17 +2552,53 @@ def process_product_step0007_files(
                     )
                 if len(listArchivedPaths) == 1:
                     pszWarning += " 古い処理0007 XLSX・TSVは片方だけ存在していました。"
+                create_step0007_skip_warning(
+                    pszInputFileFullPath,
+                    objPlan,
+                    pszCenterName,
+                    2,
+                    listArchivedPaths,
+                    dictTemporaryOutputs,
+                    objProgress,
+                )
+                objProgress.actual_output_targets -= 2
+                objProgress.skipped_centers += 1
                 listWarnings.append(pszWarning)
                 continue
             listRows, iKeptStoreCount, _ = build_product_step0007_rows(
                 listExcelRows, pszCenterName
             )
             if iKeptStoreCount == 0:
-                listWarnings.append(
-                    f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」には'
-                    + "発注がある店舗がないため、A～N列と月曜日～日曜日7行だけの"
-                    + "XLSX・TSVを作成しました。"
+                listArchivedPaths = archive_skipped_step0007_files(
+                    dictCenterPaths, objProgress
                 )
+                create_step0007_skip_warning(
+                    pszInputFileFullPath,
+                    objPlan,
+                    pszCenterName,
+                    9,
+                    listArchivedPaths,
+                    dictTemporaryOutputs,
+                    objProgress,
+                )
+                objProgress.actual_output_targets -= 2
+                objProgress.skipped_centers += 1
+                pszWarning = (
+                    f'警告: 配送センター「{pszCenterName}」の商品「{objPlan.product_name}」には'
+                    + "発注がある店舗がないため、処理0007 XLSX・TSVを作成しませんでした。"
+                )
+                if listArchivedPaths:
+                    pszWarning += (
+                        " 古い処理0007ファイルは%TEMP%へバックアップし、"
+                        + "最終更新日時付きファイル名へ変更しました。"
+                    )
+                if len(listArchivedPaths) == 1:
+                    pszWarning += " 古い処理0007 XLSX・TSVは片方だけ存在していました。"
+                listWarnings.append(pszWarning)
+                continue
+            setOldWarningPathsToArchive.add(
+                dictCenterPaths["step0007_warning.txt"]
+            )
             objExcelTemp = create_product_temporary_output(
                 dictCenterPaths["step0007.xlsx"], dictTemporaryOutputs, objProgress
             )
@@ -2496,6 +2615,8 @@ def process_product_step0007_files(
             validate_step0005_tables_match(listRows, listSavedExcelRows)
             objProgress.validated_outputs += 2
         commit_product_output_set(dictTemporaryOutputs, objProgress)
+        for objWarningPath in setOldWarningPathsToArchive:
+            archive_existing_product_files([objWarningPath], objProgress)
     finally:
         for objTemporaryPath in dictTemporaryOutputs.values():
             if objTemporaryPath.exists():
@@ -2524,10 +2645,20 @@ def process_product_file_pipeline(
         )
         objProgress.total_products = len(listPlans)
         objProgress.planned_outputs = sum(
-            len(objPlan.output_paths) - 1
-            + sum(len(dictPaths) for dictPaths in objPlan.center_output_paths.values())
+            sum(
+                1
+                for objPath in objPlan.output_paths.values()
+                if objPath.suffix.lower() != ".txt"
+            )
+            + sum(
+                1
+                for dictPaths in objPlan.center_output_paths.values()
+                for objPath in dictPaths.values()
+                if objPath.suffix.lower() != ".txt"
+            )
             for objPlan in listPlans
         )
+        objProgress.actual_output_targets = objProgress.planned_outputs
         archive_stale_step0003_files(
             pszInputFileFullPath, listPlans, objProgress
         )
@@ -2578,7 +2709,10 @@ def process_product_file_pipeline(
             objProgress.process_name = "処理0007"
             listWarnings.extend(
                 process_product_step0007_files(
-                    objPlan, listCenterNames, objProgress
+                    pszInputFileFullPath,
+                    objPlan,
+                    listCenterNames,
+                    objProgress,
                 )
             )
             objProgress.completed_process_name = "処理0007"
@@ -2678,8 +2812,11 @@ def process_input_file(
     for pszWarning in listProductWarnings:
         print(pszWarning)
     print("Products: " + str(len(listProductPlans)))
-    print("Planned Outputs: " + str(objProductProgress.planned_outputs))
-    print("Committed Outputs: " + str(objProductProgress.committed_outputs))
+    print("最大予定出力数: " + str(objProductProgress.planned_outputs))
+    print("実際の出力対象数: " + str(objProductProgress.actual_output_targets))
+    print("確定済み出力数: " + str(objProductProgress.committed_outputs))
+    print("正常スキップ配送センター数: " + str(objProductProgress.skipped_centers))
+    print("警告ファイル数: " + str(objProductProgress.warning_files))
 
 
 def parse_command_line_arguments() -> tuple[str, str | None, Path]:
