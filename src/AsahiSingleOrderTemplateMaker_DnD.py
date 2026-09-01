@@ -15,7 +15,7 @@ import win32api
 import win32con
 import win32gui
 
-from AsahiOrderTemplateMaker_Cmd import (
+from AsahiSingleOrderTemplateMaker_Cmd import (
     PRODUCT_DELETE_PROBABILITY,
     report_processing_error,
     select_start_monday,
@@ -38,14 +38,14 @@ def show_error_message_box(pszMessage: str, pszTitle: str) -> None:
     win32gui.MessageBox(0, pszMessage, pszTitle, win32con.MB_OK | win32con.MB_ICONERROR)
 
 
-def run_asahi_order_template_maker_cmd(
+def run_asahi_single_order_template_maker_cmd(
     pszInputFileFullPath: str,
     pszStartMonday: str,
     pszMappingFileFullPath: str,
 ) -> tuple[bool, str]:
     """同じフォルダーのCmdプログラムを実行します。"""
     pszCurrentDirectoryFullPath: str = os.path.dirname(os.path.abspath(__file__))
-    pszScriptFileName: str = "AsahiOrderTemplateMaker_Cmd.py"
+    pszScriptFileName: str = "AsahiSingleOrderTemplateMaker_Cmd.py"
     pszScriptFileFullPath: str = os.path.join(
         pszCurrentDirectoryFullPath, pszScriptFileName
     )
@@ -164,7 +164,7 @@ def window_proc(
                 for pszDroppedFilePath in listDroppedFilePaths:
                     report_processing_error(
                         pszDroppedFilePath,
-                        "朝日注文テンプレート処理0006",
+                        "旭注文テンプレート処理0006",
                         pszMappingError,
                     )
                 show_error_message_box(pszMappingError, WINDOW_TITLE)
@@ -179,7 +179,7 @@ def window_proc(
                 for pszDroppedFilePath in listDroppedFilePaths:
                     report_processing_error(
                         pszDroppedFilePath,
-                        "朝日注文テンプレート処理0004",
+                        "旭注文テンプレート処理0004",
                         pszSelectionError,
                     )
                 show_error_message_box(pszSelectionError, WINDOW_TITLE)
@@ -191,7 +191,7 @@ def window_proc(
                 for pszDroppedFilePath in listDroppedFilePaths:
                     report_processing_error(
                         pszDroppedFilePath,
-                        "朝日注文テンプレート処理0004",
+                        "旭注文テンプレート処理0004",
                         pszCancellationDetail,
                     )
                 show_error_message_box(
@@ -205,8 +205,10 @@ def window_proc(
             listSuccessMessages: list[str] = []
             iSuccessCount: int = 0
             for pszDroppedFilePath in listDroppedFilePaths:
-                bIsSuccess, pszResultMessage = run_asahi_order_template_maker_cmd(
-                    pszDroppedFilePath, pszStartMonday, pszMappingFileFullPath
+                bIsSuccess, pszResultMessage = (
+                    run_asahi_single_order_template_maker_cmd(
+                        pszDroppedFilePath, pszStartMonday, pszMappingFileFullPath
+                    )
                 )
                 if bIsSuccess:
                     iSuccessCount += 1
