@@ -131,10 +131,8 @@ def validate_step0007_table(listRows: list[list[str]]) -> None:
         raise ValueError("商品別step0007の店舗コードが重複しています。")
 
     listDataRows: list[list[str]] = listRows[2:]
-    tupleProductValues: tuple[str, str, str] = tuple(
-        listDataRows[0][iColumn].strip() for iColumn in (4, 5, 6)
-    )
-    if not tupleProductValues[2]:
+    # 商品基本情報は月曜日行だけに入り、火～日のC～N列は空欄またはメモです。
+    if not listDataRows[0][6].strip():
         raise ValueError("商品別step0007の商品名が空欄です。")
     for iDay, (listRow, pszExpectedWeekday) in enumerate(
         zip(listDataRows, WEEKDAYS)
@@ -143,10 +141,6 @@ def validate_step0007_table(listRows: list[list[str]]) -> None:
         if listRow[1].strip() != pszExpectedWeekday:
             raise ValueError(
                 f"商品別step0007の{iFileRow}行目の曜日が{pszExpectedWeekday}ではありません。"
-            )
-        if tuple(listRow[iColumn].strip() for iColumn in (4, 5, 6)) != tupleProductValues:
-            raise ValueError(
-                f"商品別step0007の{iFileRow}行目の商品情報が月曜日行と一致しません。"
             )
     try:
         objMonday: date = datetime.strptime(listDataRows[0][0], "%Y/%m/%d").date()
