@@ -44,7 +44,8 @@ WEEKDAYS: tuple[str, ...] = ("月", "火", "水", "木", "金", "土", "日")
 SUPPORTED_EXTENSIONS: set[str] = {".xlsx", ".tsv"}
 STEP0007_MARKER: str = "_step0007_"
 OUTPUT_PREFIX: str = "ProductCodeSelector_step0001_"
-PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
+SOURCE_PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
+PRODUCTS_FILE_NAME: str = "products_all_109_readable_ABC.tsv"
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 
 
@@ -274,9 +275,68 @@ def validate_outputs_match(objExcelPath: Path, objTsvPath: Path) -> None:
         raise ValueError("step0001のＰ品番またはAPEX品番が空欄ではありません。")
 
 
+def get_source_products_file_path() -> Path:
+    """Cmdプログラムと同じフォルダーの元商品マスターパスを返します。"""
+    return Path(__file__).resolve().parent / SOURCE_PRODUCTS_FILE_NAME
+
+
 def get_products_file_path() -> Path:
-    """Cmdプログラムと同じフォルダーの商品マスターパスを返します。"""
+    """Cmdプログラムと同じフォルダーの3列商品マスターパスを返します。"""
     return Path(__file__).resolve().parent / PRODUCTS_FILE_NAME
+
+
+def create_abc_product_master(
+    objSourcePath: Path, objOutputPath: Path
+) -> None:
+    """元商品マスターのA～C列だけを抽出したTSVを安全に作成します。"""
+    if not objSourcePath.is_file():
+        raise ValueError("元商品マスターが見つかりません。Path = " + str(objSourcePath))
+    with objSourcePath.open(mode="r", encoding="utf-8-sig", newline="") as objFile:
+        listSourceRows: list[list[str]] = list(
+            csv.reader(objFile, delimiter="\t", strict=True)
+        )
+    listSourceRows = [
+        listRow
+        for listRow in listSourceRows
+        if any(pszValue.strip() for pszValue in listRow)
+    ]
+    if not listSourceRows:
+        raise ValueError("元商品マスターが空です。")
+    if len(listSourceRows[0]) < len(PRODUCT_HEADERS):
+        raise ValueError("元商品マスターの列数が3列未満です。")
+    if tuple(pszValue.strip() for pszValue in listSourceRows[0][:3]) != PRODUCT_HEADERS:
+        raise ValueError(
+            "元商品マスターの先頭3列はproductCode、productName、specではありません。"
+        )
+    listOutputRows: list[list[str]] = [list(PRODUCT_HEADERS)]
+    for iRow, listRow in enumerate(listSourceRows[1:], start=2):
+        if len(listRow) < len(PRODUCT_HEADERS):
+            raise ValueError(f"元商品マスターの{iRow}行目が3列未満です。")
+        pszCode, pszName, pszSpec = (pszValue.strip() for pszValue in listRow[:3])
+        if not pszCode or not pszName:
+            raise ValueError(
+                f"元商品マスターの{iRow}行目の商品コードまたは商品名が空欄です。"
+            )
+        listOutputRows.append([pszCode, pszName, pszSpec])
+
+    objTemporaryPath: Path = create_temporary_path(objOutputPath)
+    try:
+        save_tsv_table(objTemporaryPath, listOutputRows)
+        with objTemporaryPath.open(
+            mode="r", encoding="utf-8-sig", newline=""
+        ) as objFile:
+            listSavedRows: list[list[str]] = list(
+                csv.reader(objFile, delimiter="\t", strict=True)
+            )
+        if listSavedRows != listOutputRows:
+            raise ValueError(
+                "products_all_109_readable_ABC.tsvの保存内容が元商品マスターのA～C列と一致しません。"
+            )
+        read_product_candidates(objTemporaryPath)
+        os.replace(objTemporaryPath, objOutputPath)
+    finally:
+        if objTemporaryPath.exists():
+            objTemporaryPath.unlink()
 
 
 def read_product_candidates(objProductsPath: Path) -> list[ProductCandidate]:
@@ -509,6 +569,9 @@ def process_input_file(
 ) -> tuple[Path, Path, Path, Path, str, ProductCandidate]:
     """step0007からstep0001を作成し、商品選択後にstep0002を作成します。"""
     objInputPath: Path = validate_input_path(pszInputFileFullPath)
+    create_abc_product_master(
+        get_source_products_file_path(), get_products_file_path()
+    )
     if objInputPath.suffix.lower() == ".xlsx":
         listRows, pszWorksheetTitle = read_excel_table(objInputPath)
     else:
