@@ -21,6 +21,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 
@@ -47,6 +48,23 @@ OUTPUT_PREFIX: str = "ProductCodeSelector_step0001_"
 SOURCE_PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable_ABC.tsv"
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
+COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
+    (12, 14),
+    (6, 8),
+    (14, 24),
+    (8, 12),
+    (14, 22),
+    (14, 22),
+    (24, 50),
+    (14, 30),
+    (14, 30),
+    (14, 18),
+    (14, 18),
+    (10, 16),
+    (12, 18),
+    (10, 18),
+)
+STORE_COLUMN_WIDTH_LIMITS: tuple[int, int] = (10, 24)
 
 
 class SelectionCancelledError(Exception):
@@ -242,6 +260,46 @@ def get_output_paths(objInputPath: Path, pszProductName: str) -> tuple[Path, Pat
     )
 
 
+def calculate_display_width(objValue: object, iColumn: int) -> int:
+    """全角文字を2、半角文字を1としてセルの最大行表示幅を返します。"""
+    if objValue is None:
+        return 0
+    if iColumn == 1 and isinstance(objValue, datetime):
+        pszValue: str = objValue.date().strftime("%Y/%m/%d")
+    elif iColumn == 1 and isinstance(objValue, date):
+        pszValue = objValue.strftime("%Y/%m/%d")
+    else:
+        pszValue = str(objValue)
+    pszValue = pszValue.replace("\t", "    ")
+    return max(
+        (
+            sum(
+                2 if unicodedata.east_asian_width(pszCharacter) in ("W", "F") else 1
+                for pszCharacter in pszLine
+            )
+            for pszLine in pszValue.splitlines() or [""]
+        ),
+        default=0,
+    )
+
+
+def adjust_excel_column_widths(objWorksheet: Worksheet) -> None:
+    """セル内容と列別の最小・最大幅に基づいて全列幅を設定します。"""
+    for iColumn in range(1, objWorksheet.max_column + 1):
+        if iColumn <= len(COLUMN_WIDTH_LIMITS):
+            iMinimumWidth, iMaximumWidth = COLUMN_WIDTH_LIMITS[iColumn - 1]
+        else:
+            iMinimumWidth, iMaximumWidth = STORE_COLUMN_WIDTH_LIMITS
+        iContentWidth: int = max(
+            calculate_display_width(
+                objWorksheet.cell(iRow, iColumn).value, iColumn
+            )
+            for iRow in range(1, objWorksheet.max_row + 1)
+        )
+        iColumnWidth: int = min(iMaximumWidth, max(iMinimumWidth, iContentWidth + 2))
+        objWorksheet.column_dimensions[get_column_letter(iColumn)].width = iColumnWidth
+
+
 def save_excel_table(
     objOutputPath: Path, listRows: list[list[str]], pszWorksheetTitle: str
 ) -> None:
@@ -264,6 +322,7 @@ def save_excel_table(
             objWorksheet.cell(iRow, 1).number_format = "yyyy/mm/dd"
             objWorksheet.cell(iRow, 5).number_format = "@"
             objWorksheet.cell(iRow, 6).number_format = "@"
+    adjust_excel_column_widths(objWorksheet)
     objWorkbook.save(objOutputPath)
 
 
