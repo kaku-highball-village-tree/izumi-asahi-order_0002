@@ -64,10 +64,18 @@ class ProductCandidate:
     @property
     def display_text(self) -> str:
         """プルダウンに表示する文字列を返します。"""
-        pszText: str = self.code + " — " + self.name
+        pszText: str = self.code + " - " + self.name
         if self.spec:
-            pszText += " — " + self.spec
+            pszText += " - " + self.spec
         return pszText
+
+
+def configure_standard_streams() -> None:
+    """標準出力と標準エラーをUTF-8へ統一します。"""
+    for objStream in (sys.stdout, sys.stderr):
+        objReconfigure = getattr(objStream, "reconfigure", None)
+        if callable(objReconfigure):
+            objReconfigure(encoding="utf-8", errors="replace")
 
 
 def normalize_cell(objValue: object, iColumn: int) -> str:
@@ -664,6 +672,7 @@ def parse_command_line_arguments() -> str:
 
 def main() -> int:
     """引数を確認し、成功0・失敗1・キャンセル2の終了コードを返します。"""
+    configure_standard_streams()
     try:
         pszInputFileFullPath: str = parse_command_line_arguments()
     except ValueError as objException:

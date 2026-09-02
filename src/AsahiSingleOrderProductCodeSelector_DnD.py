@@ -49,12 +49,17 @@ def run_product_code_selector_cmd(
             + " not found. Path = "
             + pszScriptFileFullPath,
         )
+    dictEnvironment: dict[str, str] = os.environ.copy()
+    dictEnvironment["PYTHONIOENCODING"] = "utf-8"
     try:
         objCompletedProcess: subprocess.CompletedProcess[str] = subprocess.run(
             [sys.executable, pszScriptFileFullPath, pszInputFileFullPath],
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=dictEnvironment,
         )
     except Exception as objException:
         return (
