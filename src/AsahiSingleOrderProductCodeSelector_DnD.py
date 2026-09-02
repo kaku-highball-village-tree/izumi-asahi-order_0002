@@ -16,8 +16,9 @@ import win32con
 import win32gui
 
 
-WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001 (Drag & Drop)"
+WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0002 (Drag & Drop)"
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
+PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 
 
 def show_message_box(pszMessage: str, pszTitle: str) -> None:
@@ -34,7 +35,7 @@ def show_error_message_box(pszMessage: str, pszTitle: str) -> None:
 
 def run_product_code_selector_cmd(
     pszInputFileFullPath: str,
-) -> tuple[bool, str]:
+) -> tuple[str, str]:
     """同じフォルダーのCmdプログラムを実行します。"""
     pszCurrentDirectoryFullPath: str = os.path.dirname(os.path.abspath(__file__))
     pszScriptFileFullPath: str = os.path.join(
@@ -42,7 +43,7 @@ def run_product_code_selector_cmd(
     )
     if not os.path.isfile(pszScriptFileFullPath):
         return (
-            False,
+            "failed",
             "Error: "
             + CMD_FILE_NAME
             + " not found. Path = "
@@ -57,21 +58,23 @@ def run_product_code_selector_cmd(
         )
     except Exception as objException:
         return (
-            False,
+            "failed",
             "Error: unexpected exception while running "
             + CMD_FILE_NAME
             + ". Detail = "
             + str(objException),
         )
+    if objCompletedProcess.returncode == 2:
+        return "cancelled", objCompletedProcess.stderr
     if objCompletedProcess.returncode != 0:
         pszStdErr: str = objCompletedProcess.stderr
         if pszStdErr.strip() == "":
             pszStdErr = "Process exited with non-zero return code and no stderr output."
-        return False, pszStdErr
+        return "failed", pszStdErr
     pszStdOut: str = objCompletedProcess.stdout
     if pszStdOut.strip() == "":
         pszStdOut = CMD_FILE_NAME + " finished successfully."
-    return True, pszStdOut
+    return "success", pszStdOut
 
 
 def draw_instruction_text(iWindowHandle: int) -> None:
@@ -92,7 +95,8 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "対応形式はXLSXとTSVです。\n\n"
             "Ｐ品番とAPEX品番を空欄にして、\n"
             "ProductCodeSelector step0001のXLSXとTSVを作成します。\n\n"
-            "商品コードの選択は、このstep0001処理では行いません。\n\n"
+            "続いてproducts_all_109_readable.tsvから商品候補を表示し、\n"
+            "選択結果を設定したstep0002のXLSXとTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
             "エラー時は_error.txtを出力します。"
@@ -126,9 +130,8 @@ def window_proc(
                 win32api.DragQueryFile(iDropHandle, iFileIndex)
                 for iFileIndex in range(iFileCount)
             ]
-            pszCmdPath: str = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), CMD_FILE_NAME
-            )
+            pszProgramDirectory: str = os.path.dirname(os.path.abspath(__file__))
+            pszCmdPath: str = os.path.join(pszProgramDirectory, CMD_FILE_NAME)
             if not os.path.isfile(pszCmdPath):
                 show_error_message_box(
                     CMD_FILE_NAME
@@ -136,15 +139,28 @@ def window_proc(
                     WINDOW_TITLE,
                 )
                 return 0
+            pszProductsPath: str = os.path.join(
+                pszProgramDirectory, PRODUCTS_FILE_NAME
+            )
+            if not os.path.isfile(pszProductsPath):
+                show_error_message_box(
+                    PRODUCTS_FILE_NAME
+                    + " が見つかりません。\n\nプログラムと同じフォルダーに配置してください。",
+                    WINDOW_TITLE,
+                )
+                return 0
             listFailedFileNames: list[str] = []
             listFailureDetails: list[str] = []
+            listCancelledFileNames: list[str] = []
             iSuccessCount: int = 0
             for pszDroppedFilePath in listDroppedFilePaths:
-                bIsSuccess, pszResultMessage = run_product_code_selector_cmd(
+                pszResult, pszResultMessage = run_product_code_selector_cmd(
                     pszDroppedFilePath
                 )
-                if bIsSuccess:
+                if pszResult == "success":
                     iSuccessCount += 1
+                elif pszResult == "cancelled":
+                    listCancelledFileNames.append(os.path.basename(pszDroppedFilePath))
                 else:
                     listFailedFileNames.append(os.path.basename(pszDroppedFilePath))
                     listFailureDetails.append(pszResultMessage.strip())
@@ -157,13 +173,20 @@ def window_proc(
                 + str(len(listFailedFileNames))
                 + "件失敗"
             )
+            if listCancelledFileNames:
+                pszMessage += " / " + str(len(listCancelledFileNames)) + "件キャンセル"
             if listFailedFileNames:
                 pszMessage += "\n\n失敗: " + ", ".join(listFailedFileNames)
+                if listCancelledFileNames:
+                    pszMessage += "\nキャンセル: " + ", ".join(listCancelledFileNames)
                 if listFailureDetails:
                     pszMessage += "\n\n" + "\n\n".join(listFailureDetails)
                 show_error_message_box(pszMessage, WINDOW_TITLE)
+            elif listCancelledFileNames:
+                pszMessage += "\n\nキャンセル: " + ", ".join(listCancelledFileNames)
+                show_message_box(pszMessage, WINDOW_TITLE)
             else:
-                pszMessage += "\n\nProductCodeSelector step0001のXLSXとTSVを作成しました。"
+                pszMessage += "\n\nProductCodeSelector step0001～step0002を作成しました。"
                 show_message_box(pszMessage, WINDOW_TITLE)
         finally:
             win32api.DragFinish(iDropHandle)

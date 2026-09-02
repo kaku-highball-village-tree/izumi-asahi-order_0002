@@ -14,8 +14,11 @@ import os
 import re
 import sys
 import tempfile
+import tkinter as tk
+import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from tkinter import messagebox, ttk
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -41,6 +44,29 @@ WEEKDAYS: tuple[str, ...] = ("月", "火", "水", "木", "金", "土", "日")
 SUPPORTED_EXTENSIONS: set[str] = {".xlsx", ".tsv"}
 STEP0007_MARKER: str = "_step0007_"
 OUTPUT_PREFIX: str = "ProductCodeSelector_step0001_"
+PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
+PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
+
+
+class SelectionCancelledError(Exception):
+    """商品選択がユーザー操作によってキャンセルされたことを表します。"""
+
+
+class ProductCandidate:
+    """商品マスターの1商品を保持します。"""
+
+    def __init__(self, pszCode: str, pszName: str, pszSpec: str) -> None:
+        self.code: str = pszCode
+        self.name: str = pszName
+        self.spec: str = pszSpec
+
+    @property
+    def display_text(self) -> str:
+        """プルダウンに表示する文字列を返します。"""
+        pszText: str = self.code + " — " + self.name
+        if self.spec:
+            pszText += " — " + self.spec
+        return pszText
 
 
 def normalize_cell(objValue: object, iColumn: int) -> str:
@@ -248,6 +274,174 @@ def validate_outputs_match(objExcelPath: Path, objTsvPath: Path) -> None:
         raise ValueError("step0001のＰ品番またはAPEX品番が空欄ではありません。")
 
 
+def get_products_file_path() -> Path:
+    """Cmdプログラムと同じフォルダーの商品マスターパスを返します。"""
+    return Path(__file__).resolve().parent / PRODUCTS_FILE_NAME
+
+
+def read_product_candidates(objProductsPath: Path) -> list[ProductCandidate]:
+    """商品マスターを読み込み、商品コードの矛盾を検証します。"""
+    if not objProductsPath.is_file():
+        raise ValueError("商品マスターが見つかりません。Path = " + str(objProductsPath))
+    with objProductsPath.open(mode="r", encoding="utf-8-sig", newline="") as objFile:
+        listRows: list[list[str]] = list(csv.reader(objFile, delimiter="\t", strict=True))
+    listRows = [listRow for listRow in listRows if any(pszValue.strip() for pszValue in listRow)]
+    if not listRows:
+        raise ValueError("商品マスターが空です。")
+    if tuple(pszValue.strip() for pszValue in listRows[0]) != PRODUCT_HEADERS:
+        raise ValueError("商品マスターのヘッダーがproductCode、productName、specではありません。")
+    listCandidates: list[ProductCandidate] = []
+    dictCodes: dict[str, tuple[str, str]] = {}
+    for iRow, listRow in enumerate(listRows[1:], start=2):
+        if len(listRow) != 3:
+            raise ValueError(f"商品マスターの{iRow}行目が3列ではありません。")
+        pszCode, pszName, pszSpec = (pszValue.strip() for pszValue in listRow)
+        if not pszCode or not pszName:
+            raise ValueError(f"商品マスターの{iRow}行目の商品コードまたは商品名が空欄です。")
+        tupleDefinition: tuple[str, str] = (pszName, pszSpec)
+        if pszCode in dictCodes:
+            if dictCodes[pszCode] != tupleDefinition:
+                raise ValueError("商品マスターの商品コード定義が矛盾しています。Code = " + pszCode)
+            continue
+        dictCodes[pszCode] = tupleDefinition
+        listCandidates.append(ProductCandidate(pszCode, pszName, pszSpec))
+    if not listCandidates:
+        raise ValueError("商品マスターに商品がありません。")
+    return listCandidates
+
+
+def normalize_product_name(pszValue: str) -> str:
+    """商品名を候補検索用に正規化します。"""
+    pszNormalized: str = unicodedata.normalize("NFKC", pszValue).strip().casefold()
+    return " ".join(pszNormalized.replace("\u3000", " ").split())
+
+
+def find_product_candidates(
+    listCandidates: list[ProductCandidate], pszProductName: str
+) -> list[ProductCandidate]:
+    """完全一致、正規化一致、部分一致の順に商品候補を返します。"""
+    pszTrimmedName: str = pszProductName.strip()
+    listMatched: list[ProductCandidate] = [
+        objCandidate for objCandidate in listCandidates
+        if objCandidate.name.strip() == pszTrimmedName
+    ]
+    if listMatched:
+        return listMatched
+    pszNormalizedName: str = normalize_product_name(pszProductName)
+    listMatched = [
+        objCandidate for objCandidate in listCandidates
+        if normalize_product_name(objCandidate.name) == pszNormalizedName
+    ]
+    if listMatched:
+        return listMatched
+    return [
+        objCandidate for objCandidate in listCandidates
+        if pszNormalizedName in normalize_product_name(objCandidate.name)
+        or normalize_product_name(objCandidate.name) in pszNormalizedName
+    ]
+
+
+def select_product_candidate(
+    pszProductName: str, listCandidates: list[ProductCandidate], pszSundayValue: str
+) -> ProductCandidate:
+    """Python画面のプルダウンから商品を1つ選択します。"""
+    if not listCandidates:
+        raise ValueError("商品名に一致する商品コード候補がありません。商品名 = " + pszProductName)
+    objRoot = tk.Tk()
+    objRoot.title("Asahi Single Order Product Code Selector step0002")
+    objRoot.resizable(False, False)
+    objSelectedCandidate: ProductCandidate | None = None
+    objFrame = ttk.Frame(objRoot, padding=12)
+    objFrame.grid(row=0, column=0, sticky="nsew")
+    ttk.Label(objFrame, text="入力商品名:").grid(row=0, column=0, sticky="w")
+    ttk.Label(objFrame, text=pszProductName).grid(row=1, column=0, sticky="w", pady=(0, 8))
+    ttk.Label(objFrame, text="商品候補:").grid(row=2, column=0, sticky="w")
+    listDisplayValues: list[str] = [objCandidate.display_text for objCandidate in listCandidates]
+    objSelection = tk.StringVar(value=listDisplayValues[0])
+    objComboBox = ttk.Combobox(
+        objFrame, textvariable=objSelection, values=listDisplayValues,
+        state="readonly", width=max(50, min(100, max(map(len, listDisplayValues)))),
+    )
+    objComboBox.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+
+    def confirm_selection() -> None:
+        nonlocal objSelectedCandidate
+        iSelectedIndex: int = objComboBox.current()
+        if iSelectedIndex < 0:
+            messagebox.showerror("商品選択", "商品を選択してください。", parent=objRoot)
+            return
+        if pszSundayValue and not messagebox.askyesno(
+            "商品名列の移動確認",
+            "日曜日行の商品名セルに値があります。\n\n値: "
+            + pszSundayValue
+            + "\n\n商品名列を移動すると、この値はstep0002に残りません。\n続行しますか？",
+            parent=objRoot,
+        ):
+            return
+        objSelectedCandidate = listCandidates[iSelectedIndex]
+        objRoot.destroy()
+
+    def cancel_selection() -> None:
+        objRoot.destroy()
+
+    ttk.Button(objFrame, text="確定", command=confirm_selection).grid(row=4, column=0, sticky="e")
+    ttk.Button(objFrame, text="キャンセル", command=cancel_selection).grid(row=4, column=1, sticky="w")
+    objRoot.protocol("WM_DELETE_WINDOW", cancel_selection)
+    objComboBox.focus_set()
+    objRoot.mainloop()
+    if objSelectedCandidate is None:
+        raise SelectionCancelledError("商品選択がキャンセルされました。")
+    return objSelectedCandidate
+
+
+def get_step0002_output_paths(
+    objStep0001ExcelPath: Path, objStep0001TsvPath: Path
+) -> tuple[Path, Path]:
+    """step0001の出力名からstep0002のXLSX・TSVパスを作ります。"""
+    pszMarker: str = "ProductCodeSelector_step0001_"
+    if not objStep0001ExcelPath.stem.startswith(pszMarker):
+        raise ValueError("step0001の出力ファイル名ではありません。")
+    pszStep0002Stem: str = objStep0001ExcelPath.stem.replace(
+        pszMarker, "ProductCodeSelector_step0002_", 1
+    )
+    return (
+        objStep0001ExcelPath.with_name(pszStep0002Stem + ".xlsx"),
+        objStep0001TsvPath.with_name(pszStep0002Stem + ".tsv"),
+    )
+
+
+def build_step0002_rows(
+    listStep0001Rows: list[list[str]], objCandidate: ProductCandidate
+) -> list[list[str]]:
+    """選択商品を月曜日へ設定し、元のG3～G8をG4～G9へ移動します。"""
+    listRows: list[list[str]] = [listRow.copy() for listRow in listStep0001Rows]
+    listOriginalProductNames: list[str] = [listRows[iRow][6] for iRow in range(2, 8)]
+    for listRow in listRows[2:]:
+        listRow[4] = ""
+        listRow[5] = ""
+    listRows[2][5] = objCandidate.code
+    listRows[2][6] = objCandidate.name
+    for iOffset, pszOriginalName in enumerate(listOriginalProductNames, start=3):
+        listRows[iOffset][6] = pszOriginalName
+    return listRows
+
+
+def validate_step0002_outputs(
+    objExcelPath: Path,
+    objTsvPath: Path,
+    listStep0001Rows: list[list[str]],
+    objCandidate: ProductCandidate,
+) -> None:
+    """step0002のXLSX・TSV一致と、指定セル以外が不変であることを確認します。"""
+    listExcelRows, _ = read_excel_table(objExcelPath)
+    listTsvRows, _ = read_tsv_table(objTsvPath)
+    if listExcelRows != listTsvRows:
+        raise ValueError("step0002のXLSXとTSVの内容が一致しません。")
+    listExpectedRows: list[list[str]] = build_step0002_rows(listStep0001Rows, objCandidate)
+    if listExcelRows != listExpectedRows:
+        raise ValueError("step0002の保存内容が仕様どおりではありません。")
+
+
 def create_temporary_path(objOutputPath: Path) -> Path:
     """出力と同じフォルダーに一意な一時パスを作ります。"""
     iFileDescriptor, pszTemporaryPath = tempfile.mkstemp(
@@ -302,7 +496,7 @@ def get_error_path(objInputPath: Path) -> Path:
 def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
     """処理エラーをUTF-8テキストで保存します。"""
     pszText: str = (
-        "処理名:\nProductCodeSelector step0001\n\n"
+        "処理名:\nProductCodeSelector step0001～step0002\n\n"
         + "エラー:\n"
         + pszErrorMessage
         + "\n"
@@ -310,8 +504,10 @@ def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
     objErrorPath.write_text(pszText, encoding="utf-8")
 
 
-def process_input_file(pszInputFileFullPath: str) -> tuple[Path, Path, str]:
-    """step0007からＰ品番とAPEX品番が空欄のstep0001を作成します。"""
+def process_input_file(
+    pszInputFileFullPath: str,
+) -> tuple[Path, Path, Path, Path, str, ProductCandidate]:
+    """step0007からstep0001を作成し、商品選択後にstep0002を作成します。"""
     objInputPath: Path = validate_input_path(pszInputFileFullPath)
     if objInputPath.suffix.lower() == ".xlsx":
         listRows, pszWorksheetTitle = read_excel_table(objInputPath)
@@ -339,7 +535,61 @@ def process_input_file(pszInputFileFullPath: str) -> tuple[Path, Path, str]:
         for objTemporaryPath in (objTemporaryExcelPath, objTemporaryTsvPath):
             if objTemporaryPath.exists():
                 objTemporaryPath.unlink()
-    return objExcelOutputPath, objTsvOutputPath, pszProductName
+    listStep0001ExcelRows, pszStep0001WorksheetTitle = read_excel_table(objExcelOutputPath)
+    listStep0001TsvRows, _ = read_tsv_table(objTsvOutputPath)
+    if listStep0001ExcelRows != listStep0001TsvRows:
+        raise ValueError("正式なstep0001のXLSXとTSVの内容が一致しません。")
+    listAllCandidates: list[ProductCandidate] = read_product_candidates(
+        get_products_file_path()
+    )
+    listMatchedCandidates: list[ProductCandidate] = find_product_candidates(
+        listAllCandidates, pszProductName
+    )
+    objSelectedCandidate: ProductCandidate = select_product_candidate(
+        pszProductName, listMatchedCandidates, listStep0001ExcelRows[8][6].strip()
+    )
+    listStep0002Rows: list[list[str]] = build_step0002_rows(
+        listStep0001ExcelRows, objSelectedCandidate
+    )
+    objStep0002ExcelPath, objStep0002TsvPath = get_step0002_output_paths(
+        objExcelOutputPath, objTsvOutputPath
+    )
+    objTemporaryStep0002ExcelPath: Path = create_temporary_path(objStep0002ExcelPath)
+    objTemporaryStep0002TsvPath: Path = create_temporary_path(objStep0002TsvPath)
+    try:
+        save_excel_table(
+            objTemporaryStep0002ExcelPath,
+            listStep0002Rows,
+            pszStep0001WorksheetTitle,
+        )
+        save_tsv_table(objTemporaryStep0002TsvPath, listStep0002Rows)
+        validate_step0002_outputs(
+            objTemporaryStep0002ExcelPath,
+            objTemporaryStep0002TsvPath,
+            listStep0001ExcelRows,
+            objSelectedCandidate,
+        )
+        replace_output_pair(
+            objTemporaryStep0002ExcelPath,
+            objTemporaryStep0002TsvPath,
+            objStep0002ExcelPath,
+            objStep0002TsvPath,
+        )
+    finally:
+        for objTemporaryPath in (
+            objTemporaryStep0002ExcelPath,
+            objTemporaryStep0002TsvPath,
+        ):
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    return (
+        objExcelOutputPath,
+        objTsvOutputPath,
+        objStep0002ExcelPath,
+        objStep0002TsvPath,
+        pszProductName,
+        objSelectedCandidate,
+    )
 
 
 def parse_command_line_arguments() -> str:
@@ -350,7 +600,7 @@ def parse_command_line_arguments() -> str:
 
 
 def main() -> int:
-    """引数を確認して処理し、成功0・失敗1の終了コードを返します。"""
+    """引数を確認し、成功0・失敗1・キャンセル2の終了コードを返します。"""
     try:
         pszInputFileFullPath: str = parse_command_line_arguments()
     except ValueError as objException:
@@ -367,9 +617,17 @@ def main() -> int:
         )
         return 1
     try:
-        objExcelPath, objTsvPath, pszProductName = process_input_file(
-            pszInputFileFullPath
-        )
+        (
+            objStep0001ExcelPath,
+            objStep0001TsvPath,
+            objStep0002ExcelPath,
+            objStep0002TsvPath,
+            pszProductName,
+            objSelectedCandidate,
+        ) = process_input_file(pszInputFileFullPath)
+    except SelectionCancelledError as objException:
+        print("キャンセル: " + str(objException), file=sys.stderr)
+        return 2
     except Exception as objException:
         pszMessage = "Error: " + str(objException)
         print(pszMessage, file=sys.stderr)
@@ -385,10 +643,13 @@ def main() -> int:
                 file=sys.stderr,
             )
         return 1
-    print("ProductCodeSelector step0001の作成が完了しました。")
+    print("ProductCodeSelector step0001～step0002の作成が完了しました。")
     print("商品名: " + pszProductName)
-    print("XLSX: " + str(objExcelPath))
-    print("TSV: " + str(objTsvPath))
+    print("選択商品: " + objSelectedCandidate.display_text)
+    print("step0001 XLSX: " + str(objStep0001ExcelPath))
+    print("step0001 TSV: " + str(objStep0001TsvPath))
+    print("step0002 XLSX: " + str(objStep0002ExcelPath))
+    print("step0002 TSV: " + str(objStep0002TsvPath))
     return 0
 
 
