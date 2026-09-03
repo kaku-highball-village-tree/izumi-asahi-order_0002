@@ -106,6 +106,10 @@ PRODUCT_BRAND_TERMS: dict[str, tuple[str, ...]] = {
     "日の出": ("日の出", "日の出まぐろ"),
     "地元めし": ("地元めし", "瀬戸内地元めし"),
 }
+WEAK_PRODUCT_ATTRIBUTE_GROUPS: frozenset[str] = frozenset(
+    {"冷凍", "生", "原料", "養殖", "天然"}
+)
+UNKNOWN_CATEGORY_SIMILARITY_THRESHOLD: float = 0.60
 
 
 class SelectionCancelledError(Exception):
@@ -157,7 +161,7 @@ def normalize_cell(objValue: object, iColumn: int) -> str:
 
 
 def validate_input_path(pszInputFileFullPath: str) -> Path:
-    """商品別step0007のXLSXまたはTSV入力パスを検証します。"""
+    """商品別のXLSXまたはTSV入力パスを検証します。"""
     objInputPath: Path = Path(pszInputFileFullPath).expanduser().resolve()
     if not objInputPath.is_file():
         raise ValueError("入力ファイルが見つかりません。Path = " + str(objInputPath))
@@ -165,9 +169,9 @@ def validate_input_path(pszInputFileFullPath: str) -> Path:
         raise ValueError(
             "入力形式はXLSXまたはTSVではありません。Path = " + str(objInputPath)
         )
-    if objInputPath.stem.count(STEP0007_MARKER) != 1:
+    if objInputPath.stem.count(STEP0007_MARKER) > 1:
         raise ValueError(
-            "入力ファイル名には_step0007_が1つ必要です。Path = "
+            "入力ファイル名に_step0007_を複数含めることはできません。Path = "
             + str(objInputPath)
         )
     return objInputPath
@@ -283,6 +287,18 @@ def sanitize_filename_part(pszValue: str) -> str:
 
 def get_output_paths(objInputPath: Path, pszProductName: str) -> tuple[Path, Path]:
     """入力名からProductCodeSelector step0001の出力パスを作ります。"""
+    iMarkerCount: int = objInputPath.stem.count(STEP0007_MARKER)
+    if iMarkerCount == 0:
+        pszOutputStem: str = OUTPUT_PREFIX + sanitize_filename_part(objInputPath.stem)
+        return (
+            objInputPath.with_name(pszOutputStem + ".xlsx"),
+            objInputPath.with_name(pszOutputStem + ".tsv"),
+        )
+    if iMarkerCount > 1:
+        raise ValueError(
+            "入力ファイル名に_step0007_を複数含めることはできません。Path = "
+            + str(objInputPath)
+        )
     _, pszIdentity = objInputPath.stem.split(STEP0007_MARKER, 1)
     if "_" not in pszIdentity:
         raise ValueError("step0007のファイル名に商品コード以降の情報がありません。")
@@ -296,7 +312,7 @@ def get_output_paths(objInputPath: Path, pszProductName: str) -> tuple[Path, Pat
     pszSuffix: str = pszAfterCode[len(pszExpectedProductPrefix) :]
     if not pszSuffix:
         raise ValueError("step0007のファイル名に配送センター情報がありません。")
-    pszOutputStem: str = OUTPUT_PREFIX + sanitize_filename_part(
+    pszOutputStem = OUTPUT_PREFIX + sanitize_filename_part(
         pszSafeProductName + "_" + pszSuffix
     )
     return (
@@ -616,7 +632,42 @@ def find_product_candidates(
         fSimilarity: float = difflib.SequenceMatcher(
             None, pszInputCompact, compact_product_text(objCandidate.name)
         ).ratio()
-        if listReasons or setInputCategories & setCandidateCategories or fSimilarity >= 0.25:
+        if setInputCategories:
+            bIsRelated: bool = bool(setInputCategories & setCandidateCategories)
+        else:
+            pszCandidateNormalized: str = normalize_product_name(objCandidate.name)
+            pszCandidateCompact: str = compact_product_text(objCandidate.name)
+            bStrongNameMatch: bool = (
+                objCandidate.name.strip() == pszProductName.strip()
+                or pszCandidateNormalized == normalize_product_name(pszProductName)
+                or pszCandidateCompact == pszInputCompact
+                or pszInputCompact in pszCandidateCompact
+                or pszCandidateCompact in pszInputCompact
+            )
+            setSharedStrongAttributes: set[str] = (
+                extract_term_groups(pszProductName, PRODUCT_ATTRIBUTE_TERMS)
+                & extract_term_groups(objCandidate.name, PRODUCT_ATTRIBUTE_TERMS)
+            ) - WEAK_PRODUCT_ATTRIBUTE_GROUPS
+            bSharedOriginOrBrand: bool = any(
+                extract_term_groups(pszProductName, dictTerms)
+                & extract_term_groups(objCandidate.name, dictTerms)
+                for dictTerms in (PRODUCT_ORIGIN_TERMS, PRODUCT_BRAND_TERMS)
+            )
+            pszInputSpecNormalized: str = compact_product_text(pszInputSpec)
+            pszCandidateSpecNormalized: str = compact_product_text(objCandidate.spec)
+            bMatchingSpec: bool = bool(
+                pszInputSpecNormalized
+                and pszCandidateSpecNormalized
+                and pszInputSpecNormalized == pszCandidateSpecNormalized
+            )
+            bIsRelated = bool(
+                bStrongNameMatch
+                or fSimilarity >= UNKNOWN_CATEGORY_SIMILARITY_THRESHOLD
+                or setSharedStrongAttributes
+                or bSharedOriginOrBrand
+                or bMatchingSpec
+            )
+        if bIsRelated:
             listEvaluated.append((iScore, objCandidate))
     listEvaluated.sort(key=lambda tupleItem: (-tupleItem[0], tupleItem[1].code))
     return [objCandidate for _, objCandidate in listEvaluated]
