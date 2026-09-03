@@ -71,6 +71,8 @@ def run_product_code_selector_cmd(
         )
     if objCompletedProcess.returncode == 2:
         return "cancelled", objCompletedProcess.stderr
+    if objCompletedProcess.returncode == 3:
+        return "not_found", objCompletedProcess.stderr
     if objCompletedProcess.returncode != 0:
         pszStdErr: str = objCompletedProcess.stderr
         if pszStdErr.strip() == "":
@@ -102,7 +104,8 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "ProductCodeSelector step0001のXLSXとTSVを作成します。\n\n"
             "products_all_109_readable.tsvのA～C列から\n"
             "products_all_109_readable_ABC.tsvを自動作成します。\n"
-            "続いてABC版から商品候補を表示し、\n"
+            "続いてABC版から関連候補を表示します。\n"
+            "完全一致以外の関連候補や全商品も担当者が検索・選択できます。\n"
             "選択結果を設定したstep0002のXLSXとTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
@@ -159,6 +162,7 @@ def window_proc(
             listFailedFileNames: list[str] = []
             listFailureDetails: list[str] = []
             listCancelledFileNames: list[str] = []
+            listNotFoundFileNames: list[str] = []
             iSuccessCount: int = 0
             for pszDroppedFilePath in listDroppedFilePaths:
                 pszResult, pszResultMessage = run_product_code_selector_cmd(
@@ -168,6 +172,8 @@ def window_proc(
                     iSuccessCount += 1
                 elif pszResult == "cancelled":
                     listCancelledFileNames.append(os.path.basename(pszDroppedFilePath))
+                elif pszResult == "not_found":
+                    listNotFoundFileNames.append(os.path.basename(pszDroppedFilePath))
                 else:
                     listFailedFileNames.append(os.path.basename(pszDroppedFilePath))
                     listFailureDetails.append(pszResultMessage.strip())
@@ -182,15 +188,22 @@ def window_proc(
             )
             if listCancelledFileNames:
                 pszMessage += " / " + str(len(listCancelledFileNames)) + "件キャンセル"
+            if listNotFoundFileNames:
+                pszMessage += " / " + str(len(listNotFoundFileNames)) + "件該当商品なし"
             if listFailedFileNames:
                 pszMessage += "\n\n失敗: " + ", ".join(listFailedFileNames)
                 if listCancelledFileNames:
                     pszMessage += "\nキャンセル: " + ", ".join(listCancelledFileNames)
+                if listNotFoundFileNames:
+                    pszMessage += "\n該当商品なし: " + ", ".join(listNotFoundFileNames)
                 if listFailureDetails:
                     pszMessage += "\n\n" + "\n\n".join(listFailureDetails)
                 show_error_message_box(pszMessage, WINDOW_TITLE)
-            elif listCancelledFileNames:
-                pszMessage += "\n\nキャンセル: " + ", ".join(listCancelledFileNames)
+            elif listCancelledFileNames or listNotFoundFileNames:
+                if listCancelledFileNames:
+                    pszMessage += "\n\nキャンセル: " + ", ".join(listCancelledFileNames)
+                if listNotFoundFileNames:
+                    pszMessage += "\n該当商品なし: " + ", ".join(listNotFoundFileNames)
                 show_message_box(pszMessage, WINDOW_TITLE)
             else:
                 pszMessage += "\n\nProductCodeSelector step0001～step0002を作成しました。"

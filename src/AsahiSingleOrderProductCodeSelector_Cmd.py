@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import csv
+import difflib
 import os
 import re
 import sys
@@ -65,10 +66,54 @@ COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
     (10, 18),
 )
 STORE_COLUMN_WIDTH_LIMITS: tuple[int, int] = (10, 24)
+PRODUCT_CATEGORY_TERMS: dict[str, tuple[str, ...]] = {
+    "まぐろ": ("まぐろ", "鮪", "本まぐろ", "本鮪", "クロマグロ", "黒まぐろ", "キハダ", "メバチ", "ビンナガ", "ビンチョウ", "トンボ", "ミナミマグロ", "南まぐろ", "インドまぐろ"),
+    "かき": ("かき", "牡蠣", "真牡蠣", "マガキ"),
+    "いか": ("いか", "烏賊", "紋甲いか", "モンゴウイカ", "あおりいか", "するめいか", "やりいか"),
+    "ぶり": ("ぶり", "鰤", "はまち", "ワラサ", "イナダ"),
+    "たい": ("たい", "鯛", "真鯛", "マダイ"),
+    "えび": ("えび", "海老", "蝦"),
+    "かに": ("かに", "蟹", "ずわいがに", "ずわい蟹"),
+    "たら": ("たら", "鱈", "真たら", "真鱈", "マダラ"),
+}
+PRODUCT_ATTRIBUTE_TERMS: dict[str, tuple[str, ...]] = {
+    "冷凍": ("冷凍",), "生": ("生",), "ボイル": ("ボイル", "ゆで", "茹で"),
+    "蒸し": ("蒸し",), "塩": ("塩",), "熟成": ("熟成",),
+    "ロイン": ("ロイン",), "フィレ": ("フィレ", "フィーレ", "フィレット"),
+    "切り落とし": ("切り落とし", "切落し"), "カマ": ("カマ",),
+    "ほほ肉": ("ほほ肉", "頬肉"), "頭肉": ("頭肉",), "あら": ("あら",),
+    "ラウンド": ("ラウンド",), "スキンレス": ("スキンレス", "皮なし", "皮無し"),
+    "骨取り": ("骨取り", "骨とり"), "刺身用": ("刺身用", "生食用"),
+    "加熱用": ("加熱用",), "加工品用": ("加工品用",), "原料": ("原料",),
+    "養殖": ("養殖",), "天然": ("天然",), "MEL認証": ("MEL認証",),
+    "代用品": ("代用品",),
+}
+PRODUCT_ORIGIN_TERMS: dict[str, tuple[str, ...]] = {
+    "北海道": ("北海道",), "千葉": ("千葉県", "千葉県産", "千葉産"),
+    "鳥取": ("鳥取県", "鳥取県産", "鳥取産"),
+    "岡山": ("岡山県", "岡山県産", "岡山産"),
+    "広島": ("広島県", "広島県産", "広島産"),
+    "徳島": ("徳島県", "徳島県産", "徳島産"),
+    "愛媛": ("愛媛県", "愛媛県産", "愛媛産"),
+    "高知": ("高知県", "高知県産", "高知産"),
+    "長崎": ("長崎県", "長崎県産", "長崎産"),
+    "鹿児島": ("鹿児島県", "鹿児島県産", "鹿児島産"),
+    "和歌山": ("和歌山県", "和歌山県産", "和歌山産"),
+    "瀬戸内": ("瀬戸内", "瀬戸内産"),
+    "国産": ("国産", "国内産"), "カナダ": ("カナダ", "カナダ産"),
+}
+PRODUCT_BRAND_TERMS: dict[str, tuple[str, ...]] = {
+    "日の出": ("日の出", "日の出まぐろ"),
+    "地元めし": ("地元めし", "瀬戸内地元めし"),
+}
 
 
 class SelectionCancelledError(Exception):
     """商品選択がユーザー操作によってキャンセルされたことを表します。"""
+
+
+class NoMatchingProductError(Exception):
+    """担当者が商品マスターに該当商品なしと判断したことを表します。"""
 
 
 class ProductCandidate:
@@ -440,56 +485,248 @@ def read_product_candidates(objProductsPath: Path) -> list[ProductCandidate]:
 def normalize_product_name(pszValue: str) -> str:
     """商品名を候補検索用に正規化します。"""
     pszNormalized: str = unicodedata.normalize("NFKC", pszValue).strip().casefold()
-    return " ".join(pszNormalized.replace("\u3000", " ").split())
+    listCharacters: list[str] = []
+    for pszCharacter in pszNormalized:
+        iCodePoint: int = ord(pszCharacter)
+        if 0x30A1 <= iCodePoint <= 0x30F6:
+            listCharacters.append(chr(iCodePoint - 0x60))
+        else:
+            listCharacters.append(pszCharacter)
+    return " ".join("".join(listCharacters).replace("\u3000", " ").split())
+
+
+def compact_product_text(pszValue: str) -> str:
+    """空白と記号を除いた候補比較用文字列を返します。"""
+    return "".join(
+        pszCharacter
+        for pszCharacter in normalize_product_name(pszValue)
+        if pszCharacter.isalnum()
+    )
+
+
+def extract_term_groups(
+    pszValue: str, dictTermGroups: dict[str, tuple[str, ...]]
+) -> set[str]:
+    """文字列に含まれるカテゴリまたは属性のグループ名を返します。"""
+    pszCompactValue: str = compact_product_text(pszValue)
+    return {
+        pszGroup
+        for pszGroup, tupleTerms in dictTermGroups.items()
+        if any(compact_product_text(pszTerm) in pszCompactValue for pszTerm in tupleTerms)
+    }
+
+
+def evaluate_product_candidate(
+    objCandidate: ProductCandidate, pszProductName: str, pszInputSpec: str
+) -> tuple[int, list[str], list[str]]:
+    """候補の関連度、一致理由、主な相違点を返します。"""
+    pszInputNormalized: str = normalize_product_name(pszProductName)
+    pszCandidateNormalized: str = normalize_product_name(objCandidate.name)
+    pszInputCompact: str = compact_product_text(pszProductName)
+    pszCandidateCompact: str = compact_product_text(objCandidate.name)
+    iScore: int = 0
+    listReasons: list[str] = []
+    listDifferences: list[str] = []
+    if objCandidate.name.strip() == pszProductName.strip():
+        iScore += 1000
+        listReasons.append("完全一致")
+    elif pszCandidateNormalized == pszInputNormalized:
+        iScore += 900
+        listReasons.append("正規化一致")
+    elif pszCandidateCompact == pszInputCompact:
+        iScore += 800
+        listReasons.append("空白・記号除去一致")
+    elif pszInputCompact in pszCandidateCompact or pszCandidateCompact in pszInputCompact:
+        iScore += 400
+        listReasons.append("名称包含")
+
+    setInputCategories: set[str] = extract_term_groups(
+        pszProductName, PRODUCT_CATEGORY_TERMS
+    )
+    setCandidateCategories: set[str] = extract_term_groups(
+        objCandidate.name, PRODUCT_CATEGORY_TERMS
+    )
+    setSharedCategories: set[str] = setInputCategories & setCandidateCategories
+    if setSharedCategories:
+        iScore += 300 * len(setSharedCategories)
+        listReasons.append("魚介カテゴリ一致:" + ",".join(sorted(setSharedCategories)))
+
+    setInputAttributes: set[str] = extract_term_groups(
+        pszProductName, PRODUCT_ATTRIBUTE_TERMS
+    )
+    setCandidateAttributes: set[str] = extract_term_groups(
+        objCandidate.name, PRODUCT_ATTRIBUTE_TERMS
+    )
+    setSharedAttributes: set[str] = setInputAttributes & setCandidateAttributes
+    if setSharedAttributes:
+        iScore += 100 * len(setSharedAttributes)
+        listReasons.append("属性一致:" + ",".join(sorted(setSharedAttributes)))
+    for pszDifference in sorted(setInputAttributes ^ setCandidateAttributes):
+        listDifferences.append("属性差:" + pszDifference)
+
+    for pszLabel, dictTerms, iPoints in (
+        ("産地", PRODUCT_ORIGIN_TERMS, 100),
+        ("ブランド", PRODUCT_BRAND_TERMS, 80),
+    ):
+        setInputTerms: set[str] = extract_term_groups(pszProductName, dictTerms)
+        setCandidateTerms: set[str] = extract_term_groups(objCandidate.name, dictTerms)
+        setSharedTerms: set[str] = setInputTerms & setCandidateTerms
+        if setSharedTerms:
+            iScore += iPoints * len(setSharedTerms)
+            listReasons.append(pszLabel + "一致:" + ",".join(sorted(setSharedTerms)))
+        if setInputTerms and setCandidateTerms and not setSharedTerms:
+            listDifferences.append(pszLabel + "差")
+
+    pszInputSpecNormalized: str = compact_product_text(pszInputSpec)
+    pszCandidateSpecNormalized: str = compact_product_text(objCandidate.spec)
+    if pszInputSpecNormalized and pszCandidateSpecNormalized:
+        if pszInputSpecNormalized == pszCandidateSpecNormalized:
+            iScore += 150
+            listReasons.append("仕様一致")
+        else:
+            listDifferences.append("仕様差")
+    fSimilarity: float = difflib.SequenceMatcher(
+        None, pszInputCompact, pszCandidateCompact
+    ).ratio()
+    iScore += round(fSimilarity * 200)
+    if fSimilarity >= 0.6 and not any(
+        pszReason in listReasons
+        for pszReason in ("完全一致", "正規化一致", "空白・記号除去一致")
+    ):
+        listReasons.append("名称類似")
+    return iScore, listReasons, listDifferences
 
 
 def find_product_candidates(
-    listCandidates: list[ProductCandidate], pszProductName: str
+    listCandidates: list[ProductCandidate], pszProductName: str, pszInputSpec: str = ""
 ) -> list[ProductCandidate]:
-    """完全一致、正規化一致、部分一致の順に商品候補を返します。"""
-    pszTrimmedName: str = pszProductName.strip()
-    listMatched: list[ProductCandidate] = [
-        objCandidate for objCandidate in listCandidates
-        if objCandidate.name.strip() == pszTrimmedName
-    ]
-    if listMatched:
-        return listMatched
-    pszNormalizedName: str = normalize_product_name(pszProductName)
-    listMatched = [
-        objCandidate for objCandidate in listCandidates
-        if normalize_product_name(objCandidate.name) == pszNormalizedName
-    ]
-    if listMatched:
-        return listMatched
-    return [
-        objCandidate for objCandidate in listCandidates
-        if pszNormalizedName in normalize_product_name(objCandidate.name)
-        or normalize_product_name(objCandidate.name) in pszNormalizedName
-    ]
+    """完全一致で終了せず、関連する可能性がある商品を関連度順に返します。"""
+    listEvaluated: list[tuple[int, ProductCandidate]] = []
+    setInputCategories: set[str] = extract_term_groups(
+        pszProductName, PRODUCT_CATEGORY_TERMS
+    )
+    pszInputCompact: str = compact_product_text(pszProductName)
+    for objCandidate in listCandidates:
+        iScore, listReasons, _ = evaluate_product_candidate(
+            objCandidate, pszProductName, pszInputSpec
+        )
+        setCandidateCategories: set[str] = extract_term_groups(
+            objCandidate.name, PRODUCT_CATEGORY_TERMS
+        )
+        fSimilarity: float = difflib.SequenceMatcher(
+            None, pszInputCompact, compact_product_text(objCandidate.name)
+        ).ratio()
+        if listReasons or setInputCategories & setCandidateCategories or fSimilarity >= 0.25:
+            listEvaluated.append((iScore, objCandidate))
+    listEvaluated.sort(key=lambda tupleItem: (-tupleItem[0], tupleItem[1].code))
+    return [objCandidate for _, objCandidate in listEvaluated]
 
 
 def select_product_candidate(
-    pszProductName: str, listCandidates: list[ProductCandidate], pszSundayValue: str
+    pszProductName: str,
+    pszInputSpec: str,
+    listRelatedCandidates: list[ProductCandidate],
+    listAllCandidates: list[ProductCandidate],
+    pszSundayValue: str,
 ) -> ProductCandidate:
-    """Python画面のプルダウンから商品を1つ選択します。"""
-    if not listCandidates:
-        raise ValueError("商品名に一致する商品コード候補がありません。商品名 = " + pszProductName)
+    """関連候補・全商品を検索できる画面から担当者が選択します。"""
     objRoot = tk.Tk()
     objRoot.title("Asahi Single Order Product Code Selector step0002")
-    objRoot.resizable(False, False)
+    objRoot.resizable(True, False)
     objSelectedCandidate: ProductCandidate | None = None
+    bNoMatchingProduct: bool = False
+    listVisibleCandidates: list[ProductCandidate] = []
     objFrame = ttk.Frame(objRoot, padding=12)
     objFrame.grid(row=0, column=0, sticky="nsew")
     ttk.Label(objFrame, text="入力商品名:").grid(row=0, column=0, sticky="w")
-    ttk.Label(objFrame, text=pszProductName).grid(row=1, column=0, sticky="w", pady=(0, 8))
-    ttk.Label(objFrame, text="商品候補:").grid(row=2, column=0, sticky="w")
-    listDisplayValues: list[str] = [objCandidate.display_text for objCandidate in listCandidates]
-    objSelection = tk.StringVar(value=listDisplayValues[0])
-    objComboBox = ttk.Combobox(
-        objFrame, textvariable=objSelection, values=listDisplayValues,
-        state="readonly", width=max(50, min(100, max(map(len, listDisplayValues)))),
+    ttk.Label(objFrame, text=pszProductName).grid(row=1, column=0, columnspan=3, sticky="w")
+    ttk.Label(objFrame, text="入力仕様:").grid(row=2, column=0, sticky="w")
+    ttk.Label(objFrame, text=pszInputSpec or "(空欄)").grid(
+        row=3, column=0, columnspan=3, sticky="w", pady=(0, 8)
     )
-    objComboBox.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+    ttk.Label(objFrame, text="検索:").grid(row=4, column=0, sticky="w")
+    objSearch = tk.StringVar()
+    objSearchEntry = ttk.Entry(objFrame, textvariable=objSearch, width=45)
+    objSearchEntry.grid(row=4, column=1, columnspan=2, sticky="ew")
+    ttk.Label(objFrame, text="表示対象:").grid(row=5, column=0, sticky="w")
+    objMode = tk.StringVar(value="推奨・関連候補")
+    objModeComboBox = ttk.Combobox(
+        objFrame,
+        textvariable=objMode,
+        values=("推奨・関連候補", "同じ魚介カテゴリ", "全商品"),
+        state="readonly",
+        width=20,
+    )
+    objModeComboBox.grid(row=5, column=1, sticky="w")
+    objCount = tk.StringVar()
+    ttk.Label(objFrame, textvariable=objCount).grid(row=5, column=2, sticky="e")
+    ttk.Label(objFrame, text="商品候補:").grid(row=6, column=0, sticky="w")
+    objSelection = tk.StringVar()
+    objComboBox = ttk.Combobox(
+        objFrame, textvariable=objSelection, state="readonly", width=90,
+    )
+    objComboBox.grid(row=7, column=0, columnspan=3, sticky="ew")
+    objDetails = tk.StringVar()
+    ttk.Label(objFrame, textvariable=objDetails, wraplength=760).grid(
+        row=8, column=0, columnspan=3, sticky="w", pady=(6, 12)
+    )
+
+    def update_candidate_details(*_objArguments: object) -> None:
+        iSelectedIndex: int = objComboBox.current()
+        if iSelectedIndex < 0 or iSelectedIndex >= len(listVisibleCandidates):
+            objDetails.set("")
+            return
+        _, listReasons, listDifferences = evaluate_product_candidate(
+            listVisibleCandidates[iSelectedIndex], pszProductName, pszInputSpec
+        )
+        pszDetails: str = "一致理由: " + (", ".join(listReasons) or "全商品から表示")
+        if listDifferences:
+            pszDetails += "\n相違点: " + ", ".join(listDifferences)
+        objDetails.set(pszDetails)
+
+    def refresh_candidates(*_objArguments: object) -> None:
+        nonlocal listVisibleCandidates
+        listBaseCandidates: list[ProductCandidate]
+        if objMode.get() == "全商品":
+            listBaseCandidates = listAllCandidates
+        elif objMode.get() == "同じ魚介カテゴリ":
+            setInputCategories: set[str] = extract_term_groups(
+                pszProductName, PRODUCT_CATEGORY_TERMS
+            )
+            listBaseCandidates = [
+                objCandidate
+                for objCandidate in listAllCandidates
+                if setInputCategories
+                & extract_term_groups(objCandidate.name, PRODUCT_CATEGORY_TERMS)
+            ]
+        else:
+            listBaseCandidates = listRelatedCandidates
+        listSearchTerms: list[str] = [
+            compact_product_text(pszTerm)
+            for pszTerm in objSearch.get().split()
+            if compact_product_text(pszTerm)
+        ]
+        listVisibleCandidates = [
+            objCandidate
+            for objCandidate in listBaseCandidates
+            if all(
+                pszTerm
+                in compact_product_text(
+                    objCandidate.code + " " + objCandidate.name + " " + objCandidate.spec
+                )
+                for pszTerm in listSearchTerms
+            )
+        ]
+        listDisplayValues: list[str] = [
+            objCandidate.display_text for objCandidate in listVisibleCandidates
+        ]
+        objComboBox.configure(values=listDisplayValues)
+        objCount.set("候補: " + str(len(listVisibleCandidates)) + "件")
+        if listDisplayValues:
+            objComboBox.current(0)
+        else:
+            objSelection.set("")
+        update_candidate_details()
 
     def confirm_selection() -> None:
         nonlocal objSelectedCandidate
@@ -505,17 +742,36 @@ def select_product_candidate(
             parent=objRoot,
         ):
             return
-        objSelectedCandidate = listCandidates[iSelectedIndex]
+        objSelectedCandidate = listVisibleCandidates[iSelectedIndex]
         objRoot.destroy()
 
     def cancel_selection() -> None:
         objRoot.destroy()
 
-    ttk.Button(objFrame, text="確定", command=confirm_selection).grid(row=4, column=0, sticky="e")
-    ttk.Button(objFrame, text="キャンセル", command=cancel_selection).grid(row=4, column=1, sticky="w")
+    def select_no_matching_product() -> None:
+        nonlocal bNoMatchingProduct
+        if messagebox.askyesno(
+            "該当商品なし",
+            "商品マスターに該当商品がないものとしてstep0002を作成せず終了しますか？",
+            parent=objRoot,
+        ):
+            bNoMatchingProduct = True
+            objRoot.destroy()
+
+    ttk.Button(objFrame, text="確定", command=confirm_selection).grid(row=9, column=0, sticky="e")
+    ttk.Button(objFrame, text="該当商品なし", command=select_no_matching_product).grid(
+        row=9, column=1
+    )
+    ttk.Button(objFrame, text="キャンセル", command=cancel_selection).grid(row=9, column=2, sticky="w")
+    objSearch.trace_add("write", refresh_candidates)
+    objModeComboBox.bind("<<ComboboxSelected>>", refresh_candidates)
+    objComboBox.bind("<<ComboboxSelected>>", update_candidate_details)
     objRoot.protocol("WM_DELETE_WINDOW", cancel_selection)
-    objComboBox.focus_set()
+    refresh_candidates()
+    objSearchEntry.focus_set()
     objRoot.mainloop()
+    if bNoMatchingProduct:
+        raise NoMatchingProductError("商品マスターに該当商品なしが選択されました。")
     if objSelectedCandidate is None:
         raise SelectionCancelledError("商品選択がキャンセルされました。")
     return objSelectedCandidate
@@ -672,11 +928,16 @@ def process_input_file(
     listAllCandidates: list[ProductCandidate] = read_product_candidates(
         get_products_file_path()
     )
+    pszInputSpec: str = listStep0001ExcelRows[2][8].strip()
     listMatchedCandidates: list[ProductCandidate] = find_product_candidates(
-        listAllCandidates, pszProductName
+        listAllCandidates, pszProductName, pszInputSpec
     )
     objSelectedCandidate: ProductCandidate = select_product_candidate(
-        pszProductName, listMatchedCandidates, listStep0001ExcelRows[8][6].strip()
+        pszProductName,
+        pszInputSpec,
+        listMatchedCandidates,
+        listAllCandidates,
+        listStep0001ExcelRows[8][6].strip(),
     )
     listStep0002Rows: list[list[str]] = build_step0002_rows(
         listStep0001ExcelRows, objSelectedCandidate
@@ -730,7 +991,7 @@ def parse_command_line_arguments() -> str:
 
 
 def main() -> int:
-    """引数を確認し、成功0・失敗1・キャンセル2の終了コードを返します。"""
+    """成功0・失敗1・キャンセル2・該当商品なし3の終了コードを返します。"""
     configure_standard_streams()
     try:
         pszInputFileFullPath: str = parse_command_line_arguments()
@@ -759,6 +1020,9 @@ def main() -> int:
     except SelectionCancelledError as objException:
         print("キャンセル: " + str(objException), file=sys.stderr)
         return 2
+    except NoMatchingProductError as objException:
+        print("該当商品なし: " + str(objException), file=sys.stderr)
+        return 3
     except Exception as objException:
         pszMessage = "Error: " + str(objException)
         print(pszMessage, file=sys.stderr)
