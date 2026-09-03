@@ -161,7 +161,7 @@ def normalize_cell(objValue: object, iColumn: int) -> str:
 
 
 def validate_input_path(pszInputFileFullPath: str) -> Path:
-    """商品別step0007のXLSXまたはTSV入力パスを検証します。"""
+    """商品別のXLSXまたはTSV入力パスを検証します。"""
     objInputPath: Path = Path(pszInputFileFullPath).expanduser().resolve()
     if not objInputPath.is_file():
         raise ValueError("入力ファイルが見つかりません。Path = " + str(objInputPath))
@@ -169,9 +169,9 @@ def validate_input_path(pszInputFileFullPath: str) -> Path:
         raise ValueError(
             "入力形式はXLSXまたはTSVではありません。Path = " + str(objInputPath)
         )
-    if objInputPath.stem.count(STEP0007_MARKER) != 1:
+    if objInputPath.stem.count(STEP0007_MARKER) > 1:
         raise ValueError(
-            "入力ファイル名には_step0007_が1つ必要です。Path = "
+            "入力ファイル名に_step0007_を複数含めることはできません。Path = "
             + str(objInputPath)
         )
     return objInputPath
@@ -287,6 +287,18 @@ def sanitize_filename_part(pszValue: str) -> str:
 
 def get_output_paths(objInputPath: Path, pszProductName: str) -> tuple[Path, Path]:
     """入力名からProductCodeSelector step0001の出力パスを作ります。"""
+    iMarkerCount: int = objInputPath.stem.count(STEP0007_MARKER)
+    if iMarkerCount == 0:
+        pszOutputStem: str = OUTPUT_PREFIX + sanitize_filename_part(objInputPath.stem)
+        return (
+            objInputPath.with_name(pszOutputStem + ".xlsx"),
+            objInputPath.with_name(pszOutputStem + ".tsv"),
+        )
+    if iMarkerCount > 1:
+        raise ValueError(
+            "入力ファイル名に_step0007_を複数含めることはできません。Path = "
+            + str(objInputPath)
+        )
     _, pszIdentity = objInputPath.stem.split(STEP0007_MARKER, 1)
     if "_" not in pszIdentity:
         raise ValueError("step0007のファイル名に商品コード以降の情報がありません。")
@@ -300,7 +312,7 @@ def get_output_paths(objInputPath: Path, pszProductName: str) -> tuple[Path, Pat
     pszSuffix: str = pszAfterCode[len(pszExpectedProductPrefix) :]
     if not pszSuffix:
         raise ValueError("step0007のファイル名に配送センター情報がありません。")
-    pszOutputStem: str = OUTPUT_PREFIX + sanitize_filename_part(
+    pszOutputStem = OUTPUT_PREFIX + sanitize_filename_part(
         pszSafeProductName + "_" + pszSuffix
     )
     return (

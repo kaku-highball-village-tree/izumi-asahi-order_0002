@@ -97,7 +97,7 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             objClientRect[3] - iMargin,
         )
         pszInstructionText: str = (
-            "AsahiSingleOrderTemplateMakerの商品別step0007ファイルを\n"
+            "商品別step0007ファイル（_step0007_なしの名前も可）を\n"
             "このウィンドウにドラッグ＆ドロップしてください。\n\n"
             "対応形式はXLSXとTSVです。\n\n"
             "Ｐ品番とAPEX品番を空欄にして、\n"
