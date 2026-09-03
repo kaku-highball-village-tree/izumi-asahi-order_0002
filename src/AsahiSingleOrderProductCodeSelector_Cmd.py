@@ -106,6 +106,10 @@ PRODUCT_BRAND_TERMS: dict[str, tuple[str, ...]] = {
     "日の出": ("日の出", "日の出まぐろ"),
     "地元めし": ("地元めし", "瀬戸内地元めし"),
 }
+WEAK_PRODUCT_ATTRIBUTE_GROUPS: frozenset[str] = frozenset(
+    {"冷凍", "生", "原料", "養殖", "天然"}
+)
+UNKNOWN_CATEGORY_SIMILARITY_THRESHOLD: float = 0.60
 
 
 class SelectionCancelledError(Exception):
@@ -616,7 +620,42 @@ def find_product_candidates(
         fSimilarity: float = difflib.SequenceMatcher(
             None, pszInputCompact, compact_product_text(objCandidate.name)
         ).ratio()
-        if listReasons or setInputCategories & setCandidateCategories or fSimilarity >= 0.25:
+        if setInputCategories:
+            bIsRelated: bool = bool(setInputCategories & setCandidateCategories)
+        else:
+            pszCandidateNormalized: str = normalize_product_name(objCandidate.name)
+            pszCandidateCompact: str = compact_product_text(objCandidate.name)
+            bStrongNameMatch: bool = (
+                objCandidate.name.strip() == pszProductName.strip()
+                or pszCandidateNormalized == normalize_product_name(pszProductName)
+                or pszCandidateCompact == pszInputCompact
+                or pszInputCompact in pszCandidateCompact
+                or pszCandidateCompact in pszInputCompact
+            )
+            setSharedStrongAttributes: set[str] = (
+                extract_term_groups(pszProductName, PRODUCT_ATTRIBUTE_TERMS)
+                & extract_term_groups(objCandidate.name, PRODUCT_ATTRIBUTE_TERMS)
+            ) - WEAK_PRODUCT_ATTRIBUTE_GROUPS
+            bSharedOriginOrBrand: bool = any(
+                extract_term_groups(pszProductName, dictTerms)
+                & extract_term_groups(objCandidate.name, dictTerms)
+                for dictTerms in (PRODUCT_ORIGIN_TERMS, PRODUCT_BRAND_TERMS)
+            )
+            pszInputSpecNormalized: str = compact_product_text(pszInputSpec)
+            pszCandidateSpecNormalized: str = compact_product_text(objCandidate.spec)
+            bMatchingSpec: bool = bool(
+                pszInputSpecNormalized
+                and pszCandidateSpecNormalized
+                and pszInputSpecNormalized == pszCandidateSpecNormalized
+            )
+            bIsRelated = bool(
+                bStrongNameMatch
+                or fSimilarity >= UNKNOWN_CATEGORY_SIMILARITY_THRESHOLD
+                or setSharedStrongAttributes
+                or bSharedOriginOrBrand
+                or bMatchingSpec
+            )
+        if bIsRelated:
             listEvaluated.append((iScore, objCandidate))
     listEvaluated.sort(key=lambda tupleItem: (-tupleItem[0], tupleItem[1].code))
     return [objCandidate for _, objCandidate in listEvaluated]
