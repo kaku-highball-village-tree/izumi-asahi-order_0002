@@ -16,9 +16,10 @@ import win32con
 import win32gui
 
 
-WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0002 (Drag & Drop)"
+WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0003 (Drag & Drop)"
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
+WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
 
 
 def show_message_box(pszMessage: str, pszTitle: str) -> None:
@@ -107,7 +108,10 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "続いてABC版から同じ魚介カテゴリを中心に関連候補を表示します。\n"
             "完全一致以外の同じカテゴリの商品や全商品も確認でき、\n"
             "最終的な商品は担当者が検索・選択して確定します。\n"
-            "選択結果を設定したstep0002のXLSXとTSVを作成します。\n\n"
+            "選択結果を設定したstep0002のXLSXとTSVを作成します。\n"
+            "step0002の両ファイルを再読込した後、\n"
+            "templete_イズミ週間予定表.xlsxの作成日を更新し、\n"
+            "step0003のXLSXとA1:AA36のTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
             "エラー時は_error.txtを出力します。"
@@ -160,6 +164,16 @@ def window_proc(
                     WINDOW_TITLE,
                 )
                 return 0
+            pszWeeklyTemplatePath: str = os.path.join(
+                pszProgramDirectory, WEEKLY_TEMPLATE_FILE_NAME
+            )
+            if not os.path.isfile(pszWeeklyTemplatePath):
+                show_error_message_box(
+                    WEEKLY_TEMPLATE_FILE_NAME
+                    + " が見つかりません。\n\nプログラムと同じフォルダーに配置してください。",
+                    WINDOW_TITLE,
+                )
+                return 0
             listFailedFileNames: list[str] = []
             listFailureDetails: list[str] = []
             listCancelledFileNames: list[str] = []
@@ -207,7 +221,7 @@ def window_proc(
                     pszMessage += "\n該当商品なし: " + ", ".join(listNotFoundFileNames)
                 show_message_box(pszMessage, WINDOW_TITLE)
             else:
-                pszMessage += "\n\nProductCodeSelector step0001～step0002を作成しました。"
+                pszMessage += "\n\nProductCodeSelector step0001～step0003を作成しました。"
                 show_message_box(pszMessage, WINDOW_TITLE)
         finally:
             win32api.DragFinish(iDropHandle)
