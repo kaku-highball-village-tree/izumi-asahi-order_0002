@@ -12,11 +12,14 @@ from __future__ import annotations
 import csv
 import difflib
 import os
+import posixpath
 import re
 import sys
 import tempfile
 import tkinter as tk
 import unicodedata
+import zipfile
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -918,6 +921,206 @@ def build_weekly_tsv_rows(
     return listRows
 
 
+def get_xml_local_name(pszQualifiedName: str) -> str:
+    """XMLの名前空間付き名前からローカル名を返します。"""
+    return pszQualifiedName.rsplit("}", 1)[-1]
+
+
+def get_zip_member_bytes(objArchive: zipfile.ZipFile, pszMemberName: str) -> bytes:
+    """XLSX内の重複していない必須パーツを読み込みます。"""
+    if sum(objInfo.filename == pszMemberName for objInfo in objArchive.infolist()) != 1:
+        raise ValueError(
+            "XLSX内の必須パーツを1つに特定できません。Path = "
+            + pszMemberName
+        )
+    return objArchive.read(pszMemberName)
+
+
+def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
+    """workbookとrelationshipからセンター週間のXMLパスを解決します。"""
+    pszWorkbookPart: str = "xl/workbook.xml"
+    bytesWorkbook: bytes = get_zip_member_bytes(objArchive, pszWorkbookPart)
+    objWorkbookRoot: ET.Element = ET.fromstring(bytesWorkbook)
+    listMatchedSheets: list[ET.Element] = [
+        objElement
+        for objElement in objWorkbookRoot.iter()
+        if get_xml_local_name(objElement.tag) == "sheet"
+        and objElement.attrib.get("name") == WEEKLY_SHEET_NAME
+    ]
+    if len(listMatchedSheets) != 1:
+        raise ValueError(
+            "XLSX内の「センター週間」シートを1つに特定できません。"
+        )
+    pszRelationshipId: str = next(
+        (
+            pszValue
+            for pszName, pszValue in listMatchedSheets[0].attrib.items()
+            if get_xml_local_name(pszName) == "id"
+        ),
+        "",
+    )
+    if not pszRelationshipId:
+        raise ValueError("「センター週間」シートのrelationship IDがありません。")
+
+    pszRelationshipsPart: str = "xl/_rels/workbook.xml.rels"
+    bytesRelationships: bytes = get_zip_member_bytes(
+        objArchive, pszRelationshipsPart
+    )
+    objRelationshipsRoot: ET.Element = ET.fromstring(bytesRelationships)
+    listMatchedRelationships: list[ET.Element] = [
+        objElement
+        for objElement in objRelationshipsRoot.iter()
+        if get_xml_local_name(objElement.tag) == "Relationship"
+        and objElement.attrib.get("Id") == pszRelationshipId
+    ]
+    if len(listMatchedRelationships) != 1:
+        raise ValueError(
+            "「センター週間」シートのrelationshipを1つに特定できません。"
+        )
+    objRelationship: ET.Element = listMatchedRelationships[0]
+    if objRelationship.attrib.get("TargetMode", "Internal") != "Internal":
+        raise ValueError("「センター週間」シートがXLSX内部にありません。")
+    pszTarget: str = objRelationship.attrib.get("Target", "").replace("\\", "/")
+    if not pszTarget:
+        raise ValueError("「センター週間」シートのXMLパスがありません。")
+    if pszTarget.startswith("/"):
+        pszWorksheetPart: str = posixpath.normpath(pszTarget.lstrip("/"))
+    else:
+        pszWorksheetPart = posixpath.normpath(
+            posixpath.join(posixpath.dirname(pszWorkbookPart), pszTarget)
+        )
+    if pszWorksheetPart.startswith("../") or pszWorksheetPart not in objArchive.namelist():
+        raise ValueError(
+            "「センター週間」シートのXMLが見つかりません。Path = "
+            + pszWorksheetPart
+        )
+    return pszWorksheetPart
+
+
+def get_cell_xml_span(bytesWorksheet: bytes, pszCellReference: str) -> tuple[int, int, bytes]:
+    """worksheetから指定セル要素のバイト範囲と接頭辞を返します。"""
+    bytesReference: bytes = re.escape(pszCellReference.encode("ascii"))
+    objCellPattern: re.Pattern[bytes] = re.compile(
+        rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
+        rb"(?P<attributes>[^<>]*\br\s*=\s*(?P<quote>[\"'])"
+        + bytesReference
+        + rb"(?P=quote)[^<>]*)(?P<self_closing>/?)>"
+    )
+    listMatches: list[re.Match[bytes]] = list(objCellPattern.finditer(bytesWorksheet))
+    if len(listMatches) != 1:
+        raise ValueError(
+            "「センター週間」シートの"
+            + pszCellReference
+            + "セルを1つに特定できません。"
+        )
+    objMatch: re.Match[bytes] = listMatches[0]
+    bytesPrefix: bytes = objMatch.group("prefix") or b""
+    if objMatch.group("self_closing") == b"/":
+        return objMatch.start(), objMatch.end(), bytesPrefix
+    objClosingMatch: re.Match[bytes] | None = re.search(
+        rb"</" + re.escape(bytesPrefix) + rb"c\s*>",
+        bytesWorksheet[objMatch.end() :],
+    )
+    if objClosingMatch is None:
+        raise ValueError(
+            "「センター週間」シートの"
+            + pszCellReference
+            + "セルのXML終了要素がありません。"
+        )
+    iEnd: int = objMatch.end() + objClosingMatch.end()
+    return objMatch.start(), iEnd, bytesPrefix
+
+
+def update_creation_date_in_worksheet_xml(
+    bytesWorksheet: bytes, pszCreationDate: str
+) -> bytes:
+    """worksheet XMLのAA1だけを文字列の作成日へ変更します。"""
+    iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, "AA1")
+    bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
+    iStartTagEnd: int = bytesOriginalCell.find(b">")
+    if iStartTagEnd < 0:
+        raise ValueError("「センター週間」シートのAA1セル形式が不正です。")
+    bytesStartTag: bytes = bytesOriginalCell[: iStartTagEnd + 1]
+    bytesStartTag = re.sub(
+        rb"\s+t\s*=\s*([\"'])[^\"']*\1", b"", bytesStartTag, count=1
+    )
+    if bytesStartTag.endswith(b"/>"):
+        bytesStartTag = bytesStartTag[:-2] + b' t="inlineStr">'
+    else:
+        bytesStartTag = bytesStartTag[:-1] + b' t="inlineStr">'
+    pszEscapedDate: str = (
+        pszCreationDate.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    bytesInlineString: bytes = (
+        b"<"
+        + bytesPrefix
+        + b"is><"
+        + bytesPrefix
+        + b"t>"
+        + pszEscapedDate.encode("utf-8")
+        + b"</"
+        + bytesPrefix
+        + b"t></"
+        + bytesPrefix
+        + b"is></"
+        + bytesPrefix
+        + b"c>"
+    )
+    return bytesWorksheet[:iStart] + bytesStartTag + bytesInlineString + bytesWorksheet[iEnd:]
+
+
+def save_weekly_template_with_creation_date(
+    objTemplatePath: Path, objOutputPath: Path, pszCreationDate: str
+) -> str:
+    """XLSXの描画パーツを保ったままAA1のXMLだけを更新します。"""
+    with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
+        pszWorksheetPart: str = get_weekly_worksheet_part_name(objSourceArchive)
+        bytesWorksheet: bytes = get_zip_member_bytes(
+            objSourceArchive, pszWorksheetPart
+        )
+        bytesUpdatedWorksheet: bytes = update_creation_date_in_worksheet_xml(
+            bytesWorksheet, pszCreationDate
+        )
+        with zipfile.ZipFile(objOutputPath, mode="w") as objOutputArchive:
+            objOutputArchive.comment = objSourceArchive.comment
+            for objInfo in objSourceArchive.infolist():
+                bytesContent: bytes = (
+                    bytesUpdatedWorksheet
+                    if objInfo.filename == pszWorksheetPart
+                    else objSourceArchive.read(objInfo.filename)
+                )
+                objOutputArchive.writestr(objInfo, bytesContent)
+    return pszWorksheetPart
+
+
+def validate_unmodified_xlsx_parts(
+    objTemplatePath: Path, objOutputPath: Path, pszWorksheetPart: str
+) -> None:
+    """AA1を含むworksheet以外のXLSX内部パーツが不変か確認します。"""
+    with zipfile.ZipFile(objTemplatePath, mode="r") as objTemplateArchive:
+        with zipfile.ZipFile(objOutputPath, mode="r") as objOutputArchive:
+            listTemplateNames: list[str] = [
+                objInfo.filename for objInfo in objTemplateArchive.infolist()
+            ]
+            listOutputNames: list[str] = [
+                objInfo.filename for objInfo in objOutputArchive.infolist()
+            ]
+            if listTemplateNames != listOutputNames:
+                raise ValueError("step0003 XLSXの内部パーツ構成が変更されました。")
+            for pszMemberName in listTemplateNames:
+                if pszMemberName == pszWorksheetPart:
+                    continue
+                if objTemplateArchive.read(pszMemberName) != objOutputArchive.read(
+                    pszMemberName
+                ):
+                    raise ValueError(
+                        "step0003 XLSXの変更対象外パーツが変更されました。Path = "
+                        + pszMemberName
+                    )
+
+
 def validate_step0003_outputs(
     objExcelPath: Path,
     objTsvPath: Path,
@@ -965,25 +1168,27 @@ def create_step0003_outputs(
         objStep0002ExcelPath, objStep0002TsvPath
     )
     pszCreationDate: str = date.today().strftime("%Y年%m月%d日")
-    objFormulaWorkbook: Workbook = load_workbook(objTemplatePath, data_only=False)
     objCachedWorkbook: Workbook = load_workbook(objTemplatePath, data_only=True)
     try:
-        objFormulaWorksheet: Worksheet = validate_weekly_template(objFormulaWorkbook)
         objCachedWorksheet: Worksheet = validate_weekly_template(objCachedWorkbook)
-        objFormulaWorksheet["AA1"] = pszCreationDate
         listWeeklyRows: list[list[str]] = build_weekly_tsv_rows(
             objCachedWorksheet, pszCreationDate
         )
         objTemporaryExcelPath: Path = create_temporary_path(objStep0003ExcelPath)
         objTemporaryTsvPath: Path = create_temporary_path(objStep0003TsvPath)
         try:
-            objFormulaWorkbook.save(objTemporaryExcelPath)
+            pszWorksheetPart: str = save_weekly_template_with_creation_date(
+                objTemplatePath, objTemporaryExcelPath, pszCreationDate
+            )
             save_tsv_table(objTemporaryTsvPath, listWeeklyRows)
             validate_step0003_outputs(
                 objTemporaryExcelPath,
                 objTemporaryTsvPath,
                 listWeeklyRows,
                 pszCreationDate,
+            )
+            validate_unmodified_xlsx_parts(
+                objTemplatePath, objTemporaryExcelPath, pszWorksheetPart
             )
             replace_output_pair(
                 objTemporaryExcelPath,
@@ -996,7 +1201,6 @@ def create_step0003_outputs(
                 if objTemporaryPath.exists():
                     objTemporaryPath.unlink()
     finally:
-        objFormulaWorkbook.close()
         objCachedWorkbook.close()
     return objStep0003ExcelPath, objStep0003TsvPath
 
