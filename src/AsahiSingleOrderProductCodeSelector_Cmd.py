@@ -48,6 +48,8 @@ STEP0007_MARKER: str = "_step0007_"
 OUTPUT_PREFIX: str = "ProductCodeSelector_step0001_"
 SOURCE_PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable_ABC.tsv"
+WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
+WEEKLY_SHEET_NAME: str = "センター週間"
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
     (12, 14),
@@ -411,6 +413,11 @@ def get_source_products_file_path() -> Path:
 def get_products_file_path() -> Path:
     """Cmdプログラムと同じフォルダーの3列商品マスターパスを返します。"""
     return Path(__file__).resolve().parent / PRODUCTS_FILE_NAME
+
+
+def get_weekly_template_file_path() -> Path:
+    """Cmdプログラムと同じフォルダーの週間予定表パスを返します。"""
+    return Path(__file__).resolve().parent / WEEKLY_TEMPLATE_FILE_NAME
 
 
 def create_abc_product_master(
@@ -844,6 +851,156 @@ def get_step0002_output_paths(
     )
 
 
+def get_step0003_output_paths(
+    objStep0002ExcelPath: Path, objStep0002TsvPath: Path
+) -> tuple[Path, Path]:
+    """step0002の出力名からstep0003のXLSX・TSVパスを作ります。"""
+    pszMarker: str = "ProductCodeSelector_step0002_"
+    if not objStep0002ExcelPath.stem.startswith(pszMarker):
+        raise ValueError("step0002の出力ファイル名ではありません。")
+    if objStep0002ExcelPath.stem != objStep0002TsvPath.stem:
+        raise ValueError("step0002のXLSXとTSVのファイル名が一致しません。")
+    pszStep0003Stem: str = objStep0002ExcelPath.stem.replace(
+        pszMarker, "ProductCodeSelector_step0003_", 1
+    )
+    return (
+        objStep0002ExcelPath.with_name(pszStep0003Stem + ".xlsx"),
+        objStep0002TsvPath.with_name(pszStep0003Stem + ".tsv"),
+    )
+
+
+def normalize_weekly_tsv_value(objValue: object) -> str:
+    """A1:AA36の保存済みセル値をTSV用文字列へ変換します。"""
+    if objValue is None:
+        return ""
+    if isinstance(objValue, bool):
+        return "TRUE" if objValue else "FALSE"
+    if isinstance(objValue, datetime):
+        return objValue.isoformat(sep=" ")
+    if isinstance(objValue, date):
+        return objValue.isoformat()
+    if isinstance(objValue, float) and objValue.is_integer():
+        return str(int(objValue))
+    return str(objValue)
+
+
+def validate_weekly_template(objWorkbook: Workbook) -> Worksheet:
+    """週間予定表の対象シートとA1:AA36が非結合であることを確認します。"""
+    if WEEKLY_SHEET_NAME not in objWorkbook.sheetnames:
+        raise ValueError("テンプレートに「センター週間」シートがありません。")
+    objWorksheet: Worksheet = objWorkbook[WEEKLY_SHEET_NAME]
+    for objMergedRange in objWorksheet.merged_cells.ranges:
+        if not (
+            objMergedRange.max_row < 1
+            or objMergedRange.min_row > 36
+            or objMergedRange.max_col < 1
+            or objMergedRange.min_col > 27
+        ):
+            raise ValueError(
+                "「センター週間」!A1:AA36に結合セルがあります。範囲 = "
+                + str(objMergedRange)
+            )
+    return objWorksheet
+
+
+def build_weekly_tsv_rows(
+    objCachedWorksheet: Worksheet, pszCreationDate: str
+) -> list[list[str]]:
+    """A1:AA36の保存済み計算結果を36行×27列で返します。"""
+    listRows: list[list[str]] = [
+        [
+            normalize_weekly_tsv_value(objCachedWorksheet.cell(iRow, iColumn).value)
+            for iColumn in range(1, 28)
+        ]
+        for iRow in range(1, 37)
+    ]
+    listRows[0][26] = pszCreationDate
+    return listRows
+
+
+def validate_step0003_outputs(
+    objExcelPath: Path,
+    objTsvPath: Path,
+    listExpectedTsvRows: list[list[str]],
+    pszCreationDate: str,
+) -> None:
+    """step0003の作成日とA1:AA36 TSVを保存後に確認します。"""
+    objWorkbook: Workbook = load_workbook(objExcelPath, data_only=False)
+    try:
+        objWorksheet: Worksheet = validate_weekly_template(objWorkbook)
+        objCreationDate: object = objWorksheet["AA1"].value
+        if not isinstance(objCreationDate, str):
+            raise ValueError("「センター週間」!AA1が文字列ではありません。")
+        if objCreationDate != pszCreationDate:
+            raise ValueError("「センター週間」!AA1の作成日が一致しません。")
+        if objWorksheet["AA1"].data_type == "f" or objCreationDate.startswith(("=", "'")):
+            raise ValueError("「センター週間」!AA1が正しい文字列セルではありません。")
+    finally:
+        objWorkbook.close()
+    listTsvRows, _ = read_tsv_table(objTsvPath)
+    if len(listTsvRows) != 36 or any(len(listRow) != 27 for listRow in listTsvRows):
+        raise ValueError("step0003 TSVが36行×27列ではありません。")
+    if listTsvRows != listExpectedTsvRows:
+        raise ValueError("step0003 TSVが「センター週間」!A1:AA36と一致しません。")
+
+
+def create_step0003_outputs(
+    objStep0002ExcelPath: Path, objStep0002TsvPath: Path
+) -> tuple[Path, Path]:
+    """step0002ペアを再読込し、作成日入りの週間予定表とTSVを作ります。"""
+    if not objStep0002ExcelPath.is_file() or not objStep0002TsvPath.is_file():
+        raise ValueError("step0002のXLSXとTSVの両方が必要です。")
+    listExcelRows, _ = read_excel_table(objStep0002ExcelPath)
+    listTsvRows, _ = read_tsv_table(objStep0002TsvPath)
+    if listExcelRows != listTsvRows:
+        raise ValueError("step0002のXLSXとTSVの内容が一致しません。")
+
+    objTemplatePath: Path = get_weekly_template_file_path()
+    if not objTemplatePath.is_file():
+        raise ValueError(
+            "週間予定表テンプレートが見つかりません。Path = "
+            + str(objTemplatePath)
+        )
+    objStep0003ExcelPath, objStep0003TsvPath = get_step0003_output_paths(
+        objStep0002ExcelPath, objStep0002TsvPath
+    )
+    pszCreationDate: str = date.today().strftime("%Y年%m月%d日")
+    objFormulaWorkbook: Workbook = load_workbook(objTemplatePath, data_only=False)
+    objCachedWorkbook: Workbook = load_workbook(objTemplatePath, data_only=True)
+    try:
+        objFormulaWorksheet: Worksheet = validate_weekly_template(objFormulaWorkbook)
+        objCachedWorksheet: Worksheet = validate_weekly_template(objCachedWorkbook)
+        objFormulaWorksheet["AA1"] = pszCreationDate
+        listWeeklyRows: list[list[str]] = build_weekly_tsv_rows(
+            objCachedWorksheet, pszCreationDate
+        )
+        objTemporaryExcelPath: Path = create_temporary_path(objStep0003ExcelPath)
+        objTemporaryTsvPath: Path = create_temporary_path(objStep0003TsvPath)
+        try:
+            objFormulaWorkbook.save(objTemporaryExcelPath)
+            save_tsv_table(objTemporaryTsvPath, listWeeklyRows)
+            validate_step0003_outputs(
+                objTemporaryExcelPath,
+                objTemporaryTsvPath,
+                listWeeklyRows,
+                pszCreationDate,
+            )
+            replace_output_pair(
+                objTemporaryExcelPath,
+                objTemporaryTsvPath,
+                objStep0003ExcelPath,
+                objStep0003TsvPath,
+            )
+        finally:
+            for objTemporaryPath in (objTemporaryExcelPath, objTemporaryTsvPath):
+                if objTemporaryPath.exists():
+                    objTemporaryPath.unlink()
+    finally:
+        objFormulaWorkbook.close()
+        objCachedWorkbook.close()
+    return objStep0003ExcelPath, objStep0003TsvPath
+
+
 def build_step0002_rows(
     listStep0001Rows: list[list[str]], objCandidate: ProductCandidate
 ) -> list[list[str]]:
@@ -930,7 +1087,7 @@ def get_error_path(objInputPath: Path) -> Path:
 def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
     """処理エラーをUTF-8テキストで保存します。"""
     pszText: str = (
-        "処理名:\nProductCodeSelector step0001～step0002\n\n"
+        "処理名:\nProductCodeSelector step0001～step0003\n\n"
         + "エラー:\n"
         + pszErrorMessage
         + "\n"
@@ -940,8 +1097,8 @@ def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
 
 def process_input_file(
     pszInputFileFullPath: str,
-) -> tuple[Path, Path, Path, Path, str, ProductCandidate]:
-    """step0007からstep0001を作成し、商品選択後にstep0002を作成します。"""
+) -> tuple[Path, Path, Path, Path, Path, Path, str, ProductCandidate]:
+    """step0007からstep0001～step0003を順に作成します。"""
     objInputPath: Path = validate_input_path(pszInputFileFullPath)
     create_abc_product_master(
         get_source_products_file_path(), get_products_file_path()
@@ -1024,11 +1181,16 @@ def process_input_file(
         ):
             if objTemporaryPath.exists():
                 objTemporaryPath.unlink()
+    objStep0003ExcelPath, objStep0003TsvPath = create_step0003_outputs(
+        objStep0002ExcelPath, objStep0002TsvPath
+    )
     return (
         objExcelOutputPath,
         objTsvOutputPath,
         objStep0002ExcelPath,
         objStep0002TsvPath,
+        objStep0003ExcelPath,
+        objStep0003TsvPath,
         pszProductName,
         objSelectedCandidate,
     )
@@ -1065,6 +1227,8 @@ def main() -> int:
             objStep0001TsvPath,
             objStep0002ExcelPath,
             objStep0002TsvPath,
+            objStep0003ExcelPath,
+            objStep0003TsvPath,
             pszProductName,
             objSelectedCandidate,
         ) = process_input_file(pszInputFileFullPath)
@@ -1089,13 +1253,15 @@ def main() -> int:
                 file=sys.stderr,
             )
         return 1
-    print("ProductCodeSelector step0001～step0002の作成が完了しました。")
+    print("ProductCodeSelector step0001～step0003の作成が完了しました。")
     print("商品名: " + pszProductName)
     print("選択商品: " + objSelectedCandidate.display_text)
     print("step0001 XLSX: " + str(objStep0001ExcelPath))
     print("step0001 TSV: " + str(objStep0001TsvPath))
     print("step0002 XLSX: " + str(objStep0002ExcelPath))
     print("step0002 TSV: " + str(objStep0002TsvPath))
+    print("step0003 XLSX: " + str(objStep0003ExcelPath))
+    print("step0003 TSV: " + str(objStep0003TsvPath))
     return 0
 
 
