@@ -14,6 +14,7 @@ import difflib
 import os
 import posixpath
 import re
+import shutil
 import sys
 import tempfile
 import tkinter as tk
@@ -53,6 +54,8 @@ SOURCE_PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable_ABC.tsv"
 WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
 WEEKLY_SHEET_NAME: str = "センター週間"
+AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
+AREA_NAMES: tuple[str, str, str] = ("広島", "岡山", "四国／岡山")
 SHIPMENT_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((8, 4), (8, 13), (8, 22))
 DELIVERY_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((10, 4), (10, 13), (10, 22))
 SHIPMENT_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((9, 4), (9, 13), (9, 22))
@@ -876,6 +879,312 @@ def get_step0003_output_paths(
     )
 
 
+def get_area_store_mapping_file_path() -> Path:
+    """プログラムと同じフォルダーのエリア・店舗対応表を返します。"""
+    return Path(__file__).resolve().parent / AREA_STORE_MAPPING_FILE_NAME
+
+
+def read_area_store_mapping(objMappingPath: Path) -> dict[str, str]:
+    """4列の対応表を検証し、店舗コードごとのエリアを返します。"""
+    if not objMappingPath.is_file():
+        raise ValueError(
+            AREA_STORE_MAPPING_FILE_NAME
+            + " が見つかりません。Path = "
+            + str(objMappingPath)
+        )
+    with objMappingPath.open(mode="r", encoding="utf-8-sig", newline="") as objFile:
+        listRows: list[list[str]] = list(
+            csv.reader(objFile, delimiter="\t", strict=True)
+        )
+    tupleExpectedHeaders: tuple[str, str, str, str] = (
+        "配送センター名",
+        "エリア名",
+        "店舗コード",
+        "店舗略称",
+    )
+    if not listRows or tuple(listRows[0]) != tupleExpectedHeaders:
+        raise ValueError(
+            AREA_STORE_MAPPING_FILE_NAME + "のヘッダーが4列仕様と一致しません。"
+        )
+    dictStoreAreas: dict[str, str] = {}
+    for iRow, listRow in enumerate(listRows[1:], start=2):
+        if len(listRow) != len(tupleExpectedHeaders):
+            raise ValueError(
+                f"{AREA_STORE_MAPPING_FILE_NAME}の{iRow}行目が4列ではありません。"
+            )
+        pszCenterName, pszAreaName, pszStoreCode, pszStoreName = (
+            pszValue.strip() for pszValue in listRow
+        )
+        if not all((pszCenterName, pszAreaName, pszStoreCode, pszStoreName)):
+            raise ValueError(
+                f"{AREA_STORE_MAPPING_FILE_NAME}の{iRow}行目に空欄があります。"
+            )
+        if pszAreaName not in AREA_NAMES:
+            raise ValueError(
+                f"{AREA_STORE_MAPPING_FILE_NAME}の{iRow}行目のエリア名が不正です。"
+                + " Value = "
+                + pszAreaName
+            )
+        try:
+            pszNormalizedCode: str = str(int(pszStoreCode))
+        except ValueError as objException:
+            raise ValueError(
+                f"{AREA_STORE_MAPPING_FILE_NAME}の{iRow}行目の店舗コードが不正です。"
+            ) from objException
+        if pszNormalizedCode in dictStoreAreas:
+            raise ValueError(
+                AREA_STORE_MAPPING_FILE_NAME
+                + "の店舗コードが重複しています。店舗コード = "
+                + pszNormalizedCode
+            )
+        dictStoreAreas[pszNormalizedCode] = pszAreaName
+    return dictStoreAreas
+
+
+def get_step0003_store_order_output_paths(
+    objStep0002TsvPath: Path,
+) -> tuple[Path, Path, Path, Path]:
+    """step0002名から4つの店舗別step0003 TSVパスを返します。"""
+    pszMarker: str = "ProductCodeSelector_step0002_"
+    if not objStep0002TsvPath.stem.startswith(pszMarker):
+        raise ValueError("step0002の出力ファイル名ではありません。")
+    pszStem: str = objStep0002TsvPath.stem.replace(
+        pszMarker, "ProductCodeSelector_step0003_", 1
+    )
+    return tuple(
+        objStep0002TsvPath.with_name(pszStem + pszSuffix + ".tsv")
+        for pszSuffix in ("_store_order", "_広島", "_岡山", "_四国")
+    )
+
+
+def build_store_order_rows(
+    listStep0002Rows: list[list[str]], dictStoreAreas: dict[str, str]
+) -> tuple[list[list[str]], list[list[str]], list[list[str]], list[list[str]]]:
+    """O1から最終店舗列の9行を転置し、全店舗と3エリアに分けます。"""
+    if len(listStep0002Rows) != 9:
+        raise ValueError("step0002は9行ではありません。")
+    iColumnCount: int = len(listStep0002Rows[0])
+    if iColumnCount <= len(STEP_HEADERS):
+        raise ValueError("step0002のO列以降に店舗がありません。")
+    if any(len(listRow) != iColumnCount for listRow in listStep0002Rows):
+        raise ValueError("step0002の行ごとの列数が一致しません。")
+    listAllRows: list[list[str]] = []
+    dictAreaRows: dict[str, list[list[str]]] = {
+        pszAreaName: [] for pszAreaName in AREA_NAMES
+    }
+    listMissingStores: list[tuple[str, str]] = []
+    setStoreCodes: set[str] = set()
+    for iColumn in range(len(STEP_HEADERS), iColumnCount):
+        pszRawCode: str = listStep0002Rows[0][iColumn].strip()
+        pszStoreName: str = listStep0002Rows[1][iColumn].strip()
+        if not pszRawCode or not pszStoreName:
+            raise ValueError(
+                f"step0002の{iColumn + 1}列目の店舗コードまたは店舗略称が空欄です。"
+            )
+        objCodeMatch: re.Match[str] | None = re.fullmatch(r"(\d+)(?:\.0+)?", pszRawCode)
+        if objCodeMatch is None:
+            raise ValueError(
+                f"step0002の{iColumn + 1}列目の店舗コードが不正です。"
+            )
+        pszStoreCode: str = str(int(objCodeMatch.group(1)))
+        if pszStoreCode in setStoreCodes:
+            raise ValueError("step0002の店舗コードが重複しています。")
+        setStoreCodes.add(pszStoreCode)
+        listStoreRow: list[str] = [
+            pszStoreCode,
+            pszStoreName,
+            *(listStep0002Rows[iRow][iColumn] for iRow in range(2, 9)),
+        ]
+        listAllRows.append(listStoreRow)
+        pszAreaName: str | None = dictStoreAreas.get(pszStoreCode)
+        if pszAreaName is None:
+            listMissingStores.append((pszStoreCode, pszStoreName))
+        else:
+            dictAreaRows[pszAreaName].append(listStoreRow.copy())
+    if listMissingStores:
+        pszDetails: str = "\n".join(
+            "店舗コード = " + pszCode + "、店舗略称 = " + pszName
+            for pszCode, pszName in listMissingStores
+        )
+        raise ValueError(
+            "step0002の次の店舗コードが"
+            + AREA_STORE_MAPPING_FILE_NAME
+            + "に存在しません。\n"
+            + pszDetails
+        )
+    return (
+        listAllRows,
+        dictAreaRows["広島"],
+        dictAreaRows["岡山"],
+        dictAreaRows["四国／岡山"],
+    )
+
+
+def get_unique_path(objDesiredPath: Path) -> Path:
+    """既存ファイルまたはフォルダーを上書きしないパスを返します。"""
+    if not objDesiredPath.exists():
+        return objDesiredPath
+    iSequence: int = 2
+    while True:
+        objCandidate: Path = objDesiredPath.with_name(
+            objDesiredPath.stem + "_" + str(iSequence) + objDesiredPath.suffix
+        )
+        if not objCandidate.exists():
+            return objCandidate
+        iSequence += 1
+
+
+def archive_existing_store_order_files(
+    tupleOutputPaths: tuple[Path, Path, Path, Path],
+) -> tuple[Path | None, list[Path]]:
+    """過去の通常名TSVを%TEMP%へコピー後、更新日時付きへ変更します。"""
+    listExistingPaths: list[Path] = [
+        objPath for objPath in tupleOutputPaths if objPath.is_file()
+    ]
+    if not listExistingPaths:
+        return None, []
+    iRequiredBytes: int = sum(objPath.stat().st_size for objPath in listExistingPaths)
+    iFreeBytes: int = shutil.disk_usage(tempfile.gettempdir()).free
+    if iRequiredBytes > iFreeBytes:
+        raise ValueError(
+            "%TEMP%の空き容量が不足しています。必要容量 = "
+            + str(iRequiredBytes)
+            + "、空き容量 = "
+            + str(iFreeBytes)
+        )
+    objTempRoot: Path = (
+        Path(tempfile.gettempdir()) / "AsahiSingleOrderProductCodeSelector"
+    )
+    objTempRoot.mkdir(parents=True, exist_ok=True)
+    objBackupDirectory: Path = get_unique_path(
+        objTempRoot / datetime.now().strftime("%Y%m%d%H%M%S")
+    )
+    objBackupDirectory.mkdir()
+    listCopiedPaths: list[Path] = []
+    try:
+        for objPath in listExistingPaths:
+            objCopyPath: Path = objBackupDirectory / objPath.name
+            shutil.copy2(objPath, objCopyPath)
+            listCopiedPaths.append(objCopyPath)
+            if not objCopyPath.is_file() or objCopyPath.stat().st_size != objPath.stat().st_size:
+                raise ValueError(
+                    "%TEMP%へのバックアップ検証に失敗しました。Path = "
+                    + str(objPath)
+                )
+    except Exception:
+        for objCopiedPath in listCopiedPaths:
+            if objCopiedPath.exists():
+                objCopiedPath.unlink()
+        try:
+            objBackupDirectory.rmdir()
+        except OSError:
+            pass
+        raise
+    listRenames: list[tuple[Path, Path]] = []
+    try:
+        for objPath in listExistingPaths:
+            pszModifiedTimestamp: str = datetime.fromtimestamp(
+                objPath.stat().st_mtime
+            ).strftime("%Y%m%d%H%M%S")
+            objArchivePath: Path = get_unique_path(
+                objPath.with_name(
+                    objPath.stem + "_" + pszModifiedTimestamp + objPath.suffix
+                )
+            )
+            objPath.rename(objArchivePath)
+            listRenames.append((objPath, objArchivePath))
+    except Exception:
+        listRestoreFailures: list[str] = []
+        for objOriginalPath, objArchivePath in reversed(listRenames):
+            try:
+                objArchivePath.rename(objOriginalPath)
+            except OSError:
+                listRestoreFailures.append(str(objArchivePath))
+        if listRestoreFailures:
+            raise ValueError(
+                "過去の店舗別TSVの復元に失敗しました。"
+                + " %TEMP%バックアップ = "
+                + str(objBackupDirectory)
+                + "、復元失敗パス = "
+                + ", ".join(listRestoreFailures)
+            )
+        raise
+    return objBackupDirectory, [objArchivePath for _, objArchivePath in listRenames]
+
+
+def replace_new_output_set(dictTemporaryOutputs: dict[Path, Path]) -> None:
+    """4つの新規TSVを一括確定し、失敗時は今回確定分を削除します。"""
+    listReplacedPaths: list[Path] = []
+    try:
+        for objOutputPath, objTemporaryPath in dictTemporaryOutputs.items():
+            os.replace(objTemporaryPath, objOutputPath)
+            listReplacedPaths.append(objOutputPath)
+    except Exception:
+        for objOutputPath in reversed(listReplacedPaths):
+            if objOutputPath.exists():
+                objOutputPath.unlink()
+        raise
+
+
+def create_step0003_store_order_outputs(
+    objStep0002ExcelPath: Path, objStep0002TsvPath: Path
+) -> tuple[tuple[Path, Path, Path, Path], Path | None, list[Path]]:
+    """step0002を転置・エリア分割し、4つの店舗別TSVを作成します。"""
+    if not objStep0002ExcelPath.is_file() or not objStep0002TsvPath.is_file():
+        raise ValueError("step0002のXLSXとTSVの両方が必要です。")
+    listExcelRows, _ = read_excel_table(objStep0002ExcelPath)
+    listTsvRows, _ = read_tsv_table(objStep0002TsvPath)
+    if listExcelRows != listTsvRows:
+        raise ValueError("step0002のXLSXとTSVの内容が一致しません。")
+    dictStoreAreas: dict[str, str] = read_area_store_mapping(
+        get_area_store_mapping_file_path()
+    )
+    tupleOutputRows = build_store_order_rows(listExcelRows, dictStoreAreas)
+    tupleOutputPaths = get_step0003_store_order_output_paths(objStep0002TsvPath)
+    objBackupDirectory, listArchivePaths = archive_existing_store_order_files(
+        tupleOutputPaths
+    )
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        for objOutputPath, listRows in zip(tupleOutputPaths, tupleOutputRows):
+            objTemporaryPath: Path = create_temporary_path(objOutputPath)
+            dictTemporaryOutputs[objOutputPath] = objTemporaryPath
+            save_tsv_table(objTemporaryPath, listRows)
+            listSavedRows, _ = read_tsv_table(objTemporaryPath)
+            if listSavedRows != listRows:
+                raise ValueError(
+                    "店舗別step0003 TSVの保存内容が仕様と一致しません。Path = "
+                    + str(objOutputPath)
+                )
+            if any(len(listRow) != 9 for listRow in listSavedRows):
+                raise ValueError(
+                    "店舗別step0003 TSVに9列ではない行があります。Path = "
+                    + str(objOutputPath)
+                )
+        if sorted(
+            pszRow[0] for listRows in tupleOutputRows[1:] for pszRow in listRows
+        ) != sorted(pszRow[0] for pszRow in tupleOutputRows[0]):
+            raise ValueError("エリア別TSVの店舗集合が全店舗TSVと一致しません。")
+        replace_new_output_set(dictTemporaryOutputs)
+    except Exception as objException:
+        pszArchiveDetail: str = ""
+        if objBackupDirectory is not None:
+            pszArchiveDetail = (
+                "\n過去店舗別TSVのアーカイブ: 完了"
+                + "\n%TEMP%バックアップ: "
+                + str(objBackupDirectory)
+                + "\n日時付きファイル: "
+                + (", ".join(str(objPath) for objPath in listArchivePaths) or "なし")
+                + "\n通常名の新規出力: 未作成"
+            )
+        raise ValueError(str(objException) + pszArchiveDetail) from objException
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            if objTemporaryPath.exists():
+                objTemporaryPath.unlink()
+    return tupleOutputPaths, objBackupDirectory, listArchivePaths
+
+
 def normalize_weekly_tsv_value(objValue: object) -> str:
     """A1:AB36の保存済みセル値をTSV用文字列へ変換します。"""
     if objValue is None:
@@ -1496,7 +1805,19 @@ def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
 
 def process_input_file(
     pszInputFileFullPath: str,
-) -> tuple[Path, Path, Path, Path, Path, Path, str, ProductCandidate]:
+) -> tuple[
+    Path,
+    Path,
+    Path,
+    Path,
+    tuple[Path, Path, Path, Path],
+    Path | None,
+    list[Path],
+    Path,
+    Path,
+    str,
+    ProductCandidate,
+]:
     """step0007からstep0001～step0003を順に作成します。"""
     objInputPath: Path = validate_input_path(pszInputFileFullPath)
     create_abc_product_master(
@@ -1580,6 +1901,13 @@ def process_input_file(
         ):
             if objTemporaryPath.exists():
                 objTemporaryPath.unlink()
+    (
+        tupleStoreOrderPaths,
+        objStoreOrderBackupDirectory,
+        listStoreOrderArchivePaths,
+    ) = create_step0003_store_order_outputs(
+        objStep0002ExcelPath, objStep0002TsvPath
+    )
     objStep0003ExcelPath, objStep0003TsvPath = create_step0003_outputs(
         objStep0002ExcelPath, objStep0002TsvPath
     )
@@ -1588,6 +1916,9 @@ def process_input_file(
         objTsvOutputPath,
         objStep0002ExcelPath,
         objStep0002TsvPath,
+        tupleStoreOrderPaths,
+        objStoreOrderBackupDirectory,
+        listStoreOrderArchivePaths,
         objStep0003ExcelPath,
         objStep0003TsvPath,
         pszProductName,
@@ -1626,6 +1957,9 @@ def main() -> int:
             objStep0001TsvPath,
             objStep0002ExcelPath,
             objStep0002TsvPath,
+            tupleStoreOrderPaths,
+            objStoreOrderBackupDirectory,
+            listStoreOrderArchivePaths,
             objStep0003ExcelPath,
             objStep0003TsvPath,
             pszProductName,
@@ -1659,6 +1993,17 @@ def main() -> int:
     print("step0001 TSV: " + str(objStep0001TsvPath))
     print("step0002 XLSX: " + str(objStep0002ExcelPath))
     print("step0002 TSV: " + str(objStep0002TsvPath))
+    print("step0003 Store Order TSV: " + str(tupleStoreOrderPaths[0]))
+    print("step0003 広島 TSV: " + str(tupleStoreOrderPaths[1]))
+    print("step0003 岡山 TSV: " + str(tupleStoreOrderPaths[2]))
+    print("step0003 四国 TSV: " + str(tupleStoreOrderPaths[3]))
+    if objStoreOrderBackupDirectory is not None:
+        print("Temp Backup Directory: " + str(objStoreOrderBackupDirectory))
+        print("Temp Backup Files: " + str(len(listStoreOrderArchivePaths)))
+        print(
+            "Archived Store Order Files: "
+            + ", ".join(str(objPath) for objPath in listStoreOrderArchivePaths)
+        )
     print("step0003 XLSX: " + str(objStep0003ExcelPath))
     print("step0003 TSV: " + str(objStep0003TsvPath))
     return 0
