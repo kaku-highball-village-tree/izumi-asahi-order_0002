@@ -873,7 +873,7 @@ def get_step0003_output_paths(
 
 
 def normalize_weekly_tsv_value(objValue: object) -> str:
-    """A1:AA36の保存済みセル値をTSV用文字列へ変換します。"""
+    """A1:AB36の保存済みセル値をTSV用文字列へ変換します。"""
     if objValue is None:
         return ""
     if isinstance(objValue, bool):
@@ -888,7 +888,7 @@ def normalize_weekly_tsv_value(objValue: object) -> str:
 
 
 def validate_weekly_template(objWorkbook: Workbook) -> Worksheet:
-    """週間予定表の対象シートとA1:AA36が非結合であることを確認します。"""
+    """週間予定表の対象シートとA1:AB36が非結合であることを確認します。"""
     if WEEKLY_SHEET_NAME not in objWorkbook.sheetnames:
         raise ValueError("テンプレートに「センター週間」シートがありません。")
     objWorksheet: Worksheet = objWorkbook[WEEKLY_SHEET_NAME]
@@ -897,10 +897,10 @@ def validate_weekly_template(objWorkbook: Workbook) -> Worksheet:
             objMergedRange.max_row < 1
             or objMergedRange.min_row > 36
             or objMergedRange.max_col < 1
-            or objMergedRange.min_col > 27
+            or objMergedRange.min_col > 28
         ):
             raise ValueError(
-                "「センター週間」!A1:AA36に結合セルがあります。範囲 = "
+                "「センター週間」!A1:AB36に結合セルがあります。範囲 = "
                 + str(objMergedRange)
             )
     return objWorksheet
@@ -909,15 +909,15 @@ def validate_weekly_template(objWorkbook: Workbook) -> Worksheet:
 def build_weekly_tsv_rows(
     objCachedWorksheet: Worksheet, pszCreationDate: str
 ) -> list[list[str]]:
-    """A1:AA36の保存済み計算結果を36行×27列で返します。"""
+    """A1:AB36の保存済み計算結果を36行×28列で返します。"""
     listRows: list[list[str]] = [
         [
             normalize_weekly_tsv_value(objCachedWorksheet.cell(iRow, iColumn).value)
-            for iColumn in range(1, 28)
+            for iColumn in range(1, 29)
         ]
         for iRow in range(1, 37)
     ]
-    listRows[0][26] = pszCreationDate
+    listRows[0][24] = pszCreationDate
     return listRows
 
 
@@ -1034,12 +1034,12 @@ def get_cell_xml_span(bytesWorksheet: bytes, pszCellReference: str) -> tuple[int
 def update_creation_date_in_worksheet_xml(
     bytesWorksheet: bytes, pszCreationDate: str
 ) -> bytes:
-    """worksheet XMLのAA1だけを文字列の作成日へ変更します。"""
-    iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, "AA1")
+    """worksheet XMLのY1だけを文字列の作成日へ変更します。"""
+    iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, "Y1")
     bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
     iStartTagEnd: int = bytesOriginalCell.find(b">")
     if iStartTagEnd < 0:
-        raise ValueError("「センター週間」シートのAA1セル形式が不正です。")
+        raise ValueError("「センター週間」シートのY1セル形式が不正です。")
     bytesStartTag: bytes = bytesOriginalCell[: iStartTagEnd + 1]
     bytesStartTag = re.sub(
         rb"\s+t\s*=\s*([\"'])[^\"']*\1", b"", bytesStartTag, count=1
@@ -1074,7 +1074,7 @@ def update_creation_date_in_worksheet_xml(
 def save_weekly_template_with_creation_date(
     objTemplatePath: Path, objOutputPath: Path, pszCreationDate: str
 ) -> str:
-    """XLSXの描画パーツを保ったままAA1のXMLだけを更新します。"""
+    """XLSXの描画パーツを保ったままY1のXMLだけを更新します。"""
     with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
         pszWorksheetPart: str = get_weekly_worksheet_part_name(objSourceArchive)
         bytesWorksheet: bytes = get_zip_member_bytes(
@@ -1098,7 +1098,7 @@ def save_weekly_template_with_creation_date(
 def validate_unmodified_xlsx_parts(
     objTemplatePath: Path, objOutputPath: Path, pszWorksheetPart: str
 ) -> None:
-    """AA1を含むworksheet以外のXLSX内部パーツが不変か確認します。"""
+    """Y1を含むworksheet以外のXLSX内部パーツが不変か確認します。"""
     with zipfile.ZipFile(objTemplatePath, mode="r") as objTemplateArchive:
         with zipfile.ZipFile(objOutputPath, mode="r") as objOutputArchive:
             listTemplateNames: list[str] = [
@@ -1127,24 +1127,24 @@ def validate_step0003_outputs(
     listExpectedTsvRows: list[list[str]],
     pszCreationDate: str,
 ) -> None:
-    """step0003の作成日とA1:AA36 TSVを保存後に確認します。"""
+    """step0003の作成日とA1:AB36 TSVを保存後に確認します。"""
     objWorkbook: Workbook = load_workbook(objExcelPath, data_only=False)
     try:
         objWorksheet: Worksheet = validate_weekly_template(objWorkbook)
-        objCreationDate: object = objWorksheet["AA1"].value
+        objCreationDate: object = objWorksheet["Y1"].value
         if not isinstance(objCreationDate, str):
-            raise ValueError("「センター週間」!AA1が文字列ではありません。")
+            raise ValueError("「センター週間」!Y1が文字列ではありません。")
         if objCreationDate != pszCreationDate:
-            raise ValueError("「センター週間」!AA1の作成日が一致しません。")
-        if objWorksheet["AA1"].data_type == "f" or objCreationDate.startswith(("=", "'")):
-            raise ValueError("「センター週間」!AA1が正しい文字列セルではありません。")
+            raise ValueError("「センター週間」!Y1の作成日が一致しません。")
+        if objWorksheet["Y1"].data_type == "f" or objCreationDate.startswith(("=", "'")):
+            raise ValueError("「センター週間」!Y1が正しい文字列セルではありません。")
     finally:
         objWorkbook.close()
     listTsvRows, _ = read_tsv_table(objTsvPath)
-    if len(listTsvRows) != 36 or any(len(listRow) != 27 for listRow in listTsvRows):
-        raise ValueError("step0003 TSVが36行×27列ではありません。")
+    if len(listTsvRows) != 36 or any(len(listRow) != 28 for listRow in listTsvRows):
+        raise ValueError("step0003 TSVが36行×28列ではありません。")
     if listTsvRows != listExpectedTsvRows:
-        raise ValueError("step0003 TSVが「センター週間」!A1:AA36と一致しません。")
+        raise ValueError("step0003 TSVが「センター週間」!A1:AB36と一致しません。")
 
 
 def create_step0003_outputs(
