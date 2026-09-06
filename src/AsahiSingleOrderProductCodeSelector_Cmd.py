@@ -53,6 +53,10 @@ SOURCE_PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable_ABC.tsv"
 WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
 WEEKLY_SHEET_NAME: str = "センター週間"
+SHIPMENT_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((8, 4), (8, 13), (8, 22))
+DELIVERY_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((10, 4), (10, 13), (10, 22))
+SHIPMENT_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((9, 4), (9, 13), (9, 22))
+DELIVERY_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((11, 4), (11, 13), (11, 22))
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
     (12, 14),
@@ -907,7 +911,9 @@ def validate_weekly_template(objWorkbook: Workbook) -> Worksheet:
 
 
 def build_weekly_tsv_rows(
-    objCachedWorksheet: Worksheet, pszCreationDate: str
+    objCachedWorksheet: Worksheet,
+    pszCreationDate: str,
+    listDeliveryDates: list[date],
 ) -> list[list[str]]:
     """A1:AB36の保存済み計算結果を36行×28列で返します。"""
     listRows: list[list[str]] = [
@@ -918,7 +924,72 @@ def build_weekly_tsv_rows(
         for iRow in range(1, 37)
     ]
     listRows[0][24] = pszCreationDate
+    listShipmentDates: list[date] = [
+        objDeliveryDate - timedelta(days=1) for objDeliveryDate in listDeliveryDates
+    ]
+    for iRow, iStartColumn in SHIPMENT_DATE_ROW_RANGES:
+        for iOffset, objShipmentDate in enumerate(listShipmentDates):
+            listRows[iRow - 1][iStartColumn - 1 + iOffset] = objShipmentDate.isoformat()
+    for iRow, iStartColumn in DELIVERY_DATE_ROW_RANGES:
+        for iOffset, objDeliveryDate in enumerate(listDeliveryDates):
+            listRows[iRow - 1][iStartColumn - 1 + iOffset] = objDeliveryDate.isoformat()
     return listRows
+
+
+def get_step0002_delivery_dates(listRows: list[list[str]]) -> list[date]:
+    """step0002のA3:A9を月～日の連続した納品日として返します。"""
+    if len(listRows) < 9 or any(len(listRow) < 2 for listRow in listRows[:9]):
+        raise ValueError("step0002にA3:B9の1週間データがありません。")
+    listDeliveryDates: list[date] = []
+    for iOffset, pszExpectedWeekday in enumerate(WEEKDAYS):
+        iRowIndex: int = iOffset + 2
+        try:
+            objDeliveryDate: date = datetime.strptime(
+                listRows[iRowIndex][0], "%Y/%m/%d"
+            ).date()
+        except ValueError as objException:
+            raise ValueError(
+                f"step0002のA{iRowIndex + 1}の納品日が不正です。"
+            ) from objException
+        if listRows[iRowIndex][1].strip() != pszExpectedWeekday:
+            raise ValueError(
+                f"step0002のB{iRowIndex + 1}が{pszExpectedWeekday}曜日ではありません。"
+            )
+        if objDeliveryDate.weekday() != iOffset:
+            raise ValueError(
+                f"step0002のA{iRowIndex + 1}とB{iRowIndex + 1}の日付・曜日が一致しません。"
+            )
+        listDeliveryDates.append(objDeliveryDate)
+    objMonday: date = listDeliveryDates[0]
+    if any(
+        objDeliveryDate != objMonday + timedelta(days=iOffset)
+        for iOffset, objDeliveryDate in enumerate(listDeliveryDates)
+    ):
+        raise ValueError("step0002のA3:A9が月～日の連続日付ではありません。")
+    return listDeliveryDates
+
+
+def validate_fixed_weekdays(objWorksheet: Worksheet) -> None:
+    """週間予定表の固定曜日が仕様どおりか確認します。"""
+    tupleShipmentWeekdays: tuple[str, ...] = ("日", "月", "火", "水", "木", "金", "土")
+    for iRow, iStartColumn in SHIPMENT_WEEKDAY_ROW_RANGES:
+        tupleActual: tuple[str, ...] = tuple(
+            normalize_weekly_tsv_value(
+                objWorksheet.cell(iRow, iStartColumn + iOffset).value
+            ).strip()
+            for iOffset in range(7)
+        )
+        if tupleActual != tupleShipmentWeekdays:
+            raise ValueError("週間予定表の出荷曜日が日～土の固定順ではありません。")
+    for iRow, iStartColumn in DELIVERY_WEEKDAY_ROW_RANGES:
+        tupleActual = tuple(
+            normalize_weekly_tsv_value(
+                objWorksheet.cell(iRow, iStartColumn + iOffset).value
+            ).strip()
+            for iOffset in range(7)
+        )
+        if tupleActual != WEEKDAYS:
+            raise ValueError("週間予定表の納品曜日が月～日の固定順ではありません。")
 
 
 def get_xml_local_name(pszQualifiedName: str) -> str:
@@ -1071,10 +1142,95 @@ def update_creation_date_in_worksheet_xml(
     return bytesWorksheet[:iStart] + bytesStartTag + bytesInlineString + bytesWorksheet[iEnd:]
 
 
+def update_excel_date_in_worksheet_xml(
+    bytesWorksheet: bytes, pszCellReference: str, iExcelSerial: int
+) -> bytes:
+    """worksheet XMLの指定セルだけをExcel日付シリアル値へ変更します。"""
+    iStart, iEnd, bytesPrefix = get_cell_xml_span(
+        bytesWorksheet, pszCellReference
+    )
+    bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
+    iStartTagEnd: int = bytesOriginalCell.find(b">")
+    if iStartTagEnd < 0:
+        raise ValueError(
+            "「センター週間」シートの"
+            + pszCellReference
+            + "セル形式が不正です。"
+        )
+    bytesStartTag: bytes = bytesOriginalCell[: iStartTagEnd + 1]
+    bytesStartTag = re.sub(
+        rb"\s+t\s*=\s*([\"'])[^\"']*\1", b"", bytesStartTag, count=1
+    )
+    if bytesStartTag.endswith(b"/>"):
+        bytesStartTag = bytesStartTag[:-2] + b">"
+    bytesNumericValue: bytes = (
+        b"<"
+        + bytesPrefix
+        + b"v>"
+        + str(iExcelSerial).encode("ascii")
+        + b"</"
+        + bytesPrefix
+        + b"v></"
+        + bytesPrefix
+        + b"c>"
+    )
+    return bytesWorksheet[:iStart] + bytesStartTag + bytesNumericValue + bytesWorksheet[iEnd:]
+
+
+def get_excel_date_epoch(objArchive: zipfile.ZipFile) -> date:
+    """テンプレートの1900または1904日付システムの基準日を返します。"""
+    bytesWorkbook: bytes = get_zip_member_bytes(objArchive, "xl/workbook.xml")
+    objWorkbookRoot: ET.Element = ET.fromstring(bytesWorkbook)
+    objWorkbookProperties: ET.Element | None = next(
+        (
+            objElement
+            for objElement in objWorkbookRoot.iter()
+            if get_xml_local_name(objElement.tag) == "workbookPr"
+        ),
+        None,
+    )
+    pszDate1904: str = (
+        objWorkbookProperties.attrib.get("date1904", "0")
+        if objWorkbookProperties is not None
+        else "0"
+    )
+    if pszDate1904 not in ("0", "1", "false", "true"):
+        raise ValueError("テンプレートのExcel日付システム設定が不正です。")
+    return date(1904, 1, 1) if pszDate1904 in ("1", "true") else date(1899, 12, 30)
+
+
+def update_weekly_dates_in_worksheet_xml(
+    bytesWorksheet: bytes,
+    listDeliveryDates: list[date],
+    objExcelEpoch: date,
+) -> bytes:
+    """出荷日・納品日の6範囲に同じ1週間をExcel日付で設定します。"""
+    listShipmentDates: list[date] = [
+        objDeliveryDate - timedelta(days=1) for objDeliveryDate in listDeliveryDates
+    ]
+    for tupleRanges, listDates in (
+        (SHIPMENT_DATE_ROW_RANGES, listShipmentDates),
+        (DELIVERY_DATE_ROW_RANGES, listDeliveryDates),
+    ):
+        for iRow, iStartColumn in tupleRanges:
+            for iOffset, objTargetDate in enumerate(listDates):
+                pszCellReference: str = (
+                    get_column_letter(iStartColumn + iOffset) + str(iRow)
+                )
+                iExcelSerial: int = (objTargetDate - objExcelEpoch).days
+                bytesWorksheet = update_excel_date_in_worksheet_xml(
+                    bytesWorksheet, pszCellReference, iExcelSerial
+                )
+    return bytesWorksheet
+
+
 def save_weekly_template_with_creation_date(
-    objTemplatePath: Path, objOutputPath: Path, pszCreationDate: str
+    objTemplatePath: Path,
+    objOutputPath: Path,
+    pszCreationDate: str,
+    listDeliveryDates: list[date],
 ) -> str:
-    """XLSXの描画パーツを保ったままY1のXMLだけを更新します。"""
+    """XLSXの描画パーツを保ったままY1と週間日付を更新します。"""
     with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
         pszWorksheetPart: str = get_weekly_worksheet_part_name(objSourceArchive)
         bytesWorksheet: bytes = get_zip_member_bytes(
@@ -1082,6 +1238,11 @@ def save_weekly_template_with_creation_date(
         )
         bytesUpdatedWorksheet: bytes = update_creation_date_in_worksheet_xml(
             bytesWorksheet, pszCreationDate
+        )
+        bytesUpdatedWorksheet = update_weekly_dates_in_worksheet_xml(
+            bytesUpdatedWorksheet,
+            listDeliveryDates,
+            get_excel_date_epoch(objSourceArchive),
         )
         with zipfile.ZipFile(objOutputPath, mode="w") as objOutputArchive:
             objOutputArchive.comment = objSourceArchive.comment
@@ -1126,6 +1287,7 @@ def validate_step0003_outputs(
     objTsvPath: Path,
     listExpectedTsvRows: list[list[str]],
     pszCreationDate: str,
+    listDeliveryDates: list[date],
 ) -> None:
     """step0003の作成日とA1:AB36 TSVを保存後に確認します。"""
     objWorkbook: Workbook = load_workbook(objExcelPath, data_only=False)
@@ -1138,6 +1300,33 @@ def validate_step0003_outputs(
             raise ValueError("「センター週間」!Y1の作成日が一致しません。")
         if objWorksheet["Y1"].data_type == "f" or objCreationDate.startswith(("=", "'")):
             raise ValueError("「センター週間」!Y1が正しい文字列セルではありません。")
+        validate_fixed_weekdays(objWorksheet)
+        listShipmentDates: list[date] = [
+            objDeliveryDate - timedelta(days=1)
+            for objDeliveryDate in listDeliveryDates
+        ]
+        for tupleRanges, listExpectedDates in (
+            (SHIPMENT_DATE_ROW_RANGES, listShipmentDates),
+            (DELIVERY_DATE_ROW_RANGES, listDeliveryDates),
+        ):
+            for iRow, iStartColumn in tupleRanges:
+                for iOffset, objExpectedDate in enumerate(listExpectedDates):
+                    objValue: object = objWorksheet.cell(
+                        iRow, iStartColumn + iOffset
+                    ).value
+                    if isinstance(objValue, datetime):
+                        objActualDate: date | None = objValue.date()
+                    elif isinstance(objValue, date):
+                        objActualDate = objValue
+                    else:
+                        objActualDate = None
+                    if objActualDate != objExpectedDate:
+                        raise ValueError(
+                            "step0003 XLSXの出荷日または納品日が"
+                            "Excel日付型の期待値と一致しません。セル = "
+                            + get_column_letter(iStartColumn + iOffset)
+                            + str(iRow)
+                        )
     finally:
         objWorkbook.close()
     listTsvRows, _ = read_tsv_table(objTsvPath)
@@ -1157,6 +1346,7 @@ def create_step0003_outputs(
     listTsvRows, _ = read_tsv_table(objStep0002TsvPath)
     if listExcelRows != listTsvRows:
         raise ValueError("step0002のXLSXとTSVの内容が一致しません。")
+    listDeliveryDates: list[date] = get_step0002_delivery_dates(listExcelRows)
 
     objTemplatePath: Path = get_weekly_template_file_path()
     if not objTemplatePath.is_file():
@@ -1171,14 +1361,18 @@ def create_step0003_outputs(
     objCachedWorkbook: Workbook = load_workbook(objTemplatePath, data_only=True)
     try:
         objCachedWorksheet: Worksheet = validate_weekly_template(objCachedWorkbook)
+        validate_fixed_weekdays(objCachedWorksheet)
         listWeeklyRows: list[list[str]] = build_weekly_tsv_rows(
-            objCachedWorksheet, pszCreationDate
+            objCachedWorksheet, pszCreationDate, listDeliveryDates
         )
         objTemporaryExcelPath: Path = create_temporary_path(objStep0003ExcelPath)
         objTemporaryTsvPath: Path = create_temporary_path(objStep0003TsvPath)
         try:
             pszWorksheetPart: str = save_weekly_template_with_creation_date(
-                objTemplatePath, objTemporaryExcelPath, pszCreationDate
+                objTemplatePath,
+                objTemporaryExcelPath,
+                pszCreationDate,
+                listDeliveryDates,
             )
             save_tsv_table(objTemporaryTsvPath, listWeeklyRows)
             validate_step0003_outputs(
@@ -1186,6 +1380,7 @@ def create_step0003_outputs(
                 objTemporaryTsvPath,
                 listWeeklyRows,
                 pszCreationDate,
+                listDeliveryDates,
             )
             validate_unmodified_xlsx_parts(
                 objTemplatePath, objTemporaryExcelPath, pszWorksheetPart

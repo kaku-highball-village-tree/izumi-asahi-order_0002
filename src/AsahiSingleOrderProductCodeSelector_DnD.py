@@ -111,6 +111,7 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "選択結果を設定したstep0002のXLSXとTSVを作成します。\n"
             "step0002の両ファイルを再読込した後、\n"
             "templete_イズミ週間予定表.xlsxの作成日を更新し、\n"
+            "step0002の納品日とその前日の出荷日を3地区へ設定し、\n"
             "step0003のXLSXとA1:AB36のTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
