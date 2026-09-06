@@ -16,9 +16,11 @@ import win32con
 import win32gui
 
 
-WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0002 (Drag & Drop)"
+WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0003 (Drag & Drop)"
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
+WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
+AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 
 
 def show_message_box(pszMessage: str, pszTitle: str) -> None:
@@ -31,6 +33,27 @@ def show_message_box(pszMessage: str, pszTitle: str) -> None:
 def show_error_message_box(pszMessage: str, pszTitle: str) -> None:
     """エラー内容をエラーアイコン付きメッセージボックスで表示します。"""
     win32gui.MessageBox(0, pszMessage, pszTitle, win32con.MB_OK | win32con.MB_ICONERROR)
+
+
+def write_dropped_file_error_texts(
+    listDroppedFilePaths: list[str], pszErrorMessage: str
+) -> list[str]:
+    """ドロップ入力ごとにCmd版と同形式の_error.txtを作成します。"""
+    pszText: str = (
+        "処理名:\nProductCodeSelector step0001～step0003\n\n"
+        + "エラー:\n"
+        + pszErrorMessage
+        + "\n"
+    )
+    listWriteFailures: list[str] = []
+    for pszDroppedFilePath in listDroppedFilePaths:
+        pszErrorPath: str = os.path.splitext(os.path.abspath(pszDroppedFilePath))[0] + "_error.txt"
+        try:
+            with open(pszErrorPath, mode="w", encoding="utf-8", newline="") as objFile:
+                objFile.write(pszText)
+        except OSError as objException:
+            listWriteFailures.append(pszErrorPath + ": " + str(objException))
+    return listWriteFailures
 
 
 def run_product_code_selector_cmd(
@@ -107,7 +130,15 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "続いてABC版から同じ魚介カテゴリを中心に関連候補を表示します。\n"
             "完全一致以外の同じカテゴリの商品や全商品も確認でき、\n"
             "最終的な商品は担当者が検索・選択して確定します。\n"
-            "選択結果を設定したstep0002のXLSXとTSVを作成します。\n\n"
+            "選択結果を設定したstep0002のXLSXとTSVを作成します。\n"
+            "step0002の両ファイルを再読込した後、\n"
+            "O1から最終店舗列の9行を転置し、\n"
+            "全店舗・広島・岡山・四国の店舗別TSVを作成します。\n"
+            "既存の店舗別TSVは%TEMP%へコピー後、\n"
+            "元フォルダーで最終更新日時付きの名前へ変更します。\n"
+            "templete_イズミ週間予定表.xlsxの作成日を更新し、\n"
+            "step0002の納品日とその前日の出荷日を3地区へ設定し、\n"
+            "step0003のXLSXとA1:AB36のTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
             "エラー時は_error.txtを出力します。"
@@ -160,10 +191,45 @@ def window_proc(
                     WINDOW_TITLE,
                 )
                 return 0
+            pszWeeklyTemplatePath: str = os.path.join(
+                pszProgramDirectory, WEEKLY_TEMPLATE_FILE_NAME
+            )
+            if not os.path.isfile(pszWeeklyTemplatePath):
+                show_error_message_box(
+                    WEEKLY_TEMPLATE_FILE_NAME
+                    + " が見つかりません。\n\nプログラムと同じフォルダーに配置してください。",
+                    WINDOW_TITLE,
+                )
+                return 0
+            pszMappingPath: str = os.path.join(
+                pszProgramDirectory, AREA_STORE_MAPPING_FILE_NAME
+            )
+            if not os.path.isfile(pszMappingPath):
+                pszErrorMessage: str = (
+                    AREA_STORE_MAPPING_FILE_NAME
+                    + " が見つかりません。"
+                    + "プログラムと同じフォルダーに配置してください。"
+                )
+                listWriteFailures: list[str] = write_dropped_file_error_texts(
+                    listDroppedFilePaths, pszErrorMessage
+                )
+                pszDialogMessage: str = pszErrorMessage.replace("。プ", "。\n\nプ")
+                if listWriteFailures:
+                    pszDialogMessage += (
+                        "\n\n_error.txtを保存できない入力があります。\n"
+                        + "\n".join(listWriteFailures)
+                    )
+                else:
+                    pszDialogMessage += (
+                        "\n\nドロップされた各入力の_error.txtを作成しました。"
+                    )
+                show_error_message_box(pszDialogMessage, WINDOW_TITLE)
+                return 0
             listFailedFileNames: list[str] = []
             listFailureDetails: list[str] = []
             listCancelledFileNames: list[str] = []
             listNotFoundFileNames: list[str] = []
+            listSuccessDetails: list[str] = []
             iSuccessCount: int = 0
             for pszDroppedFilePath in listDroppedFilePaths:
                 pszResult, pszResultMessage = run_product_code_selector_cmd(
@@ -171,6 +237,7 @@ def window_proc(
                 )
                 if pszResult == "success":
                     iSuccessCount += 1
+                    listSuccessDetails.append(pszResultMessage.strip())
                 elif pszResult == "cancelled":
                     listCancelledFileNames.append(os.path.basename(pszDroppedFilePath))
                 elif pszResult == "not_found":
@@ -207,7 +274,9 @@ def window_proc(
                     pszMessage += "\n該当商品なし: " + ", ".join(listNotFoundFileNames)
                 show_message_box(pszMessage, WINDOW_TITLE)
             else:
-                pszMessage += "\n\nProductCodeSelector step0001～step0002を作成しました。"
+                pszMessage += "\n\nProductCodeSelector step0001～step0003を作成しました。"
+                if listSuccessDetails:
+                    pszMessage += "\n\n" + "\n\n".join(listSuccessDetails)
                 show_message_box(pszMessage, WINDOW_TITLE)
         finally:
             win32api.DragFinish(iDropHandle)
