@@ -385,6 +385,7 @@ def window_proc(
             listFailedFileNames: list[str] = []
             listCancelledFileNames: list[str] = []
             listNotFoundFileNames: list[str] = []
+            listSuccessDetails: list[str] = []
             iSuccessCount: int = 0
             for pszDroppedFilePath in listDroppedFilePaths:
                 pszResult, pszResultMessage = run_product_code_selector_cmd(
@@ -392,6 +393,7 @@ def window_proc(
                 )
                 if pszResult == "success":
                     iSuccessCount += 1
+                    listSuccessDetails.append(pszResultMessage.strip())
                 elif pszResult == "cancelled":
                     listCancelledFileNames.append(os.path.basename(pszDroppedFilePath))
                 elif pszResult == "not_found":
