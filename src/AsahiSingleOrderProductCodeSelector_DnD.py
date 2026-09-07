@@ -244,7 +244,7 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "元フォルダーで最終更新日時付きの名前へ変更します。\n"
             "templete_イズミ週間予定表.xlsxの作成日を更新し、\n"
             "step0002の納品日とその前日の出荷日を3地区へ設定し、\n"
-            "step0003のXLSXとA1:AB36のTSVを作成します。\n\n"
+            "step0003のXLSXとA1:AB42のTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
             "エラー時は_error.txtを出力します。"

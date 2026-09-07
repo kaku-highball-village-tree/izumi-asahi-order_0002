@@ -54,6 +54,11 @@ SOURCE_PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable_ABC.tsv"
 WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
 WEEKLY_SHEET_NAME: str = "センター週間"
+WEEKLY_TSV_MAX_ROW: int = 42
+WEEKLY_TSV_MAX_COLUMN: int = 28
+WEEKLY_TSV_RANGE: str = (
+    "A1:" + get_column_letter(WEEKLY_TSV_MAX_COLUMN) + str(WEEKLY_TSV_MAX_ROW)
+)
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 AREA_NAMES: tuple[str, str, str] = ("広島", "岡山", "四国／岡山")
 SHIPMENT_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((8, 4), (8, 13), (8, 22))
@@ -1186,7 +1191,7 @@ def create_step0003_store_order_outputs(
 
 
 def normalize_weekly_tsv_value(objValue: object) -> str:
-    """A1:AB36の保存済みセル値をTSV用文字列へ変換します。"""
+    """A1:AB42の保存済みセル値をTSV用文字列へ変換します。"""
     if objValue is None:
         return ""
     if isinstance(objValue, bool):
@@ -1201,19 +1206,21 @@ def normalize_weekly_tsv_value(objValue: object) -> str:
 
 
 def validate_weekly_template(objWorkbook: Workbook) -> Worksheet:
-    """週間予定表の対象シートとA1:AB36が非結合であることを確認します。"""
+    """週間予定表の対象シートとA1:AB42が非結合であることを確認します。"""
     if WEEKLY_SHEET_NAME not in objWorkbook.sheetnames:
         raise ValueError("テンプレートに「センター週間」シートがありません。")
     objWorksheet: Worksheet = objWorkbook[WEEKLY_SHEET_NAME]
     for objMergedRange in objWorksheet.merged_cells.ranges:
         if not (
             objMergedRange.max_row < 1
-            or objMergedRange.min_row > 36
+            or objMergedRange.min_row > WEEKLY_TSV_MAX_ROW
             or objMergedRange.max_col < 1
-            or objMergedRange.min_col > 28
+            or objMergedRange.min_col > WEEKLY_TSV_MAX_COLUMN
         ):
             raise ValueError(
-                "「センター週間」!A1:AB36に結合セルがあります。範囲 = "
+                "「センター週間」!"
+                + WEEKLY_TSV_RANGE
+                + "に結合セルがあります。範囲 = "
                 + str(objMergedRange)
             )
     return objWorksheet
@@ -1224,13 +1231,13 @@ def build_weekly_tsv_rows(
     pszCreationDate: str,
     listDeliveryDates: list[date],
 ) -> list[list[str]]:
-    """A1:AB36の保存済み計算結果を36行×28列で返します。"""
+    """A1:AB42の保存済み計算結果を42行×28列で返します。"""
     listRows: list[list[str]] = [
         [
             normalize_weekly_tsv_value(objCachedWorksheet.cell(iRow, iColumn).value)
-            for iColumn in range(1, 29)
+            for iColumn in range(1, WEEKLY_TSV_MAX_COLUMN + 1)
         ]
-        for iRow in range(1, 37)
+        for iRow in range(1, WEEKLY_TSV_MAX_ROW + 1)
     ]
     listRows[0][24] = pszCreationDate
     listShipmentDates: list[date] = [
@@ -1598,7 +1605,7 @@ def validate_step0003_outputs(
     pszCreationDate: str,
     listDeliveryDates: list[date],
 ) -> None:
-    """step0003の作成日とA1:AB36 TSVを保存後に確認します。"""
+    """step0003の作成日とA1:AB42 TSVを保存後に確認します。"""
     objWorkbook: Workbook = load_workbook(objExcelPath, data_only=False)
     try:
         objWorksheet: Worksheet = validate_weekly_template(objWorkbook)
@@ -1639,10 +1646,22 @@ def validate_step0003_outputs(
     finally:
         objWorkbook.close()
     listTsvRows, _ = read_tsv_table(objTsvPath)
-    if len(listTsvRows) != 36 or any(len(listRow) != 28 for listRow in listTsvRows):
-        raise ValueError("step0003 TSVが36行×28列ではありません。")
+    if len(listTsvRows) != WEEKLY_TSV_MAX_ROW or any(
+        len(listRow) != WEEKLY_TSV_MAX_COLUMN for listRow in listTsvRows
+    ):
+        raise ValueError(
+            "step0003 TSVが"
+            + str(WEEKLY_TSV_MAX_ROW)
+            + "行×"
+            + str(WEEKLY_TSV_MAX_COLUMN)
+            + "列ではありません。"
+        )
     if listTsvRows != listExpectedTsvRows:
-        raise ValueError("step0003 TSVが「センター週間」!A1:AB36と一致しません。")
+        raise ValueError(
+            "step0003 TSVが「センター週間」!"
+            + WEEKLY_TSV_RANGE
+            + "と一致しません。"
+        )
 
 
 def create_step0003_outputs(
