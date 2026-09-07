@@ -1792,6 +1792,77 @@ def get_error_path(objInputPath: Path) -> Path:
     return objInputPath.with_name(objInputPath.stem + "_error.txt")
 
 
+def get_success_path(objInputPath: Path) -> Path:
+    """入力ファイルを基準に成功テキストのパスを返します。"""
+    return objInputPath.with_name(objInputPath.stem + "_success.txt")
+
+
+def get_next_result_history_path(objResultPath: Path, pszResult: str) -> Path:
+    """既存の最大連番の次の成功またはエラー履歴パスを返します。"""
+    pszBaseStem: str = objResultPath.stem[: -(len(pszResult) + 1)]
+    objPattern: re.Pattern[str] = re.compile(
+        re.escape(pszBaseStem) + "_" + re.escape(pszResult) + r"_(\d{4,})\.txt$"
+    )
+    iMaximumSequence: int = 0
+    for objPath in objResultPath.parent.glob(
+        pszBaseStem + "_" + pszResult + "_*.txt"
+    ):
+        objMatch: re.Match[str] | None = objPattern.fullmatch(objPath.name)
+        if objMatch is not None:
+            iMaximumSequence = max(iMaximumSequence, int(objMatch.group(1)))
+    return objResultPath.with_name(
+        pszBaseStem + "_" + pszResult + "_" + f"{iMaximumSequence + 1:04d}.txt"
+    )
+
+
+def replace_result_text(
+    objInputPath: Path, pszResult: str, pszText: str
+) -> Path:
+    """過去の成功・エラーを履歴化し、今回の結果を安全に保存します。"""
+    if pszResult not in ("success", "error"):
+        raise ValueError("結果テキストの種類が不正です。")
+    objSuccessPath: Path = get_success_path(objInputPath)
+    objErrorPath: Path = get_error_path(objInputPath)
+    objCurrentPath: Path = objSuccessPath if pszResult == "success" else objErrorPath
+    objTemporaryPath: Path = create_temporary_path(objCurrentPath)
+    pszCrLfText: str = (
+        pszText.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+    )
+    objTemporaryPath.write_bytes(pszCrLfText.encode("utf-8"))
+    if objTemporaryPath.read_bytes() != pszCrLfText.encode("utf-8"):
+        objTemporaryPath.unlink(missing_ok=True)
+        raise ValueError("結果テキストの一時保存内容が一致しません。")
+
+    listRenames: list[tuple[Path, Path]] = []
+    try:
+        for objOldPath, pszOldResult in (
+            (objSuccessPath, "success"),
+            (objErrorPath, "error"),
+        ):
+            if not objOldPath.is_file():
+                continue
+            objHistoryPath: Path = get_next_result_history_path(
+                objOldPath, pszOldResult
+            )
+            objOldPath.rename(objHistoryPath)
+            listRenames.append((objOldPath, objHistoryPath))
+        os.replace(objTemporaryPath, objCurrentPath)
+    except Exception:
+        if objCurrentPath.exists() and not any(
+            objOriginalPath == objCurrentPath
+            for objOriginalPath, _ in listRenames
+        ):
+            objCurrentPath.unlink()
+        for objOriginalPath, objHistoryPath in reversed(listRenames):
+            if objHistoryPath.exists() and not objOriginalPath.exists():
+                objHistoryPath.rename(objOriginalPath)
+        raise
+    finally:
+        if objTemporaryPath.exists():
+            objTemporaryPath.unlink()
+    return objCurrentPath
+
+
 def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
     """処理エラーをUTF-8テキストで保存します。"""
     pszText: str = (
@@ -1800,7 +1871,69 @@ def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
         + pszErrorMessage
         + "\n"
     )
-    objErrorPath.write_text(pszText, encoding="utf-8")
+    pszInputStem: str = objErrorPath.stem.removesuffix("_error")
+    objInputPath: Path = objErrorPath.with_name(pszInputStem)
+    replace_result_text(objInputPath, "error", pszText)
+
+
+def write_success_text(
+    objInputPath: Path,
+    objStep0001ExcelPath: Path,
+    objStep0001TsvPath: Path,
+    objStep0002ExcelPath: Path,
+    objStep0002TsvPath: Path,
+    tupleStoreOrderPaths: tuple[Path, Path, Path, Path],
+    objStoreOrderBackupDirectory: Path | None,
+    listStoreOrderArchivePaths: list[Path],
+    objStep0003ExcelPath: Path,
+    objStep0003TsvPath: Path,
+    pszProductName: str,
+    objSelectedCandidate: ProductCandidate,
+) -> Path:
+    """全出力とバックアップ情報を今回の_success.txtへ保存します。"""
+    listLines: list[str] = [
+        "処理名:",
+        "ProductCodeSelector step0001～step0003",
+        "",
+        "処理結果:",
+        "成功",
+        "",
+        "入力ファイル:",
+        str(objInputPath),
+        "",
+        "商品名:",
+        pszProductName,
+        "",
+        "選択商品:",
+        objSelectedCandidate.display_text,
+        "",
+        "出力ファイル:",
+        "step0001 XLSX: " + str(objStep0001ExcelPath),
+        "step0001 TSV: " + str(objStep0001TsvPath),
+        "step0002 XLSX: " + str(objStep0002ExcelPath),
+        "step0002 TSV: " + str(objStep0002TsvPath),
+        "step0003 Store Order TSV: " + str(tupleStoreOrderPaths[0]),
+        "step0003 広島 TSV: " + str(tupleStoreOrderPaths[1]),
+        "step0003 岡山 TSV: " + str(tupleStoreOrderPaths[2]),
+        "step0003 四国 TSV: " + str(tupleStoreOrderPaths[3]),
+        "step0003 XLSX: " + str(objStep0003ExcelPath),
+        "step0003 TSV: " + str(objStep0003TsvPath),
+        "",
+        "バックアップ:",
+    ]
+    if objStoreOrderBackupDirectory is None:
+        listLines.append("なし")
+    else:
+        listLines.extend(
+            [
+                "%TEMP%バックアップ: "
+                + str(objStoreOrderBackupDirectory),
+                "",
+                "日時付きアーカイブ:",
+                *(str(objPath) for objPath in listStoreOrderArchivePaths),
+            ]
+        )
+    return replace_result_text(objInputPath, "success", "\n".join(listLines) + "\n")
 
 
 def process_input_file(
@@ -1965,6 +2098,20 @@ def main() -> int:
             pszProductName,
             objSelectedCandidate,
         ) = process_input_file(pszInputFileFullPath)
+        write_success_text(
+            Path(pszInputFileFullPath).expanduser().resolve(),
+            objStep0001ExcelPath,
+            objStep0001TsvPath,
+            objStep0002ExcelPath,
+            objStep0002TsvPath,
+            tupleStoreOrderPaths,
+            objStoreOrderBackupDirectory,
+            listStoreOrderArchivePaths,
+            objStep0003ExcelPath,
+            objStep0003TsvPath,
+            pszProductName,
+            objSelectedCandidate,
+        )
     except SelectionCancelledError as objException:
         print("キャンセル: " + str(objException), file=sys.stderr)
         return 2
