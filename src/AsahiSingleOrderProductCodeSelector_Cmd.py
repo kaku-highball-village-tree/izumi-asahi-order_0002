@@ -1868,7 +1868,7 @@ def clear_cell_value_in_worksheet_xml(
             + "セルを1つに特定できません。"
         )
     objMatch: re.Match[bytes] = listMatches[0]
-    if objMatch.group("self_closing") == b"/":
+    if objMatch.group(0).rstrip().endswith(b"/>"):
         return bytesWorksheet
     bytesPrefix: bytes = objMatch.group("prefix") or b""
     objClosingMatch: re.Match[bytes] | None = re.search(
