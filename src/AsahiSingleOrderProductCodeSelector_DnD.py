@@ -19,7 +19,7 @@ import win32con
 import win32gui
 
 
-WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0003 (Drag & Drop)"
+WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0004 (Drag & Drop)"
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
@@ -73,7 +73,7 @@ def write_input_error_text(pszInputFilePath: str, pszErrorMessage: str) -> None:
     objSuccessPath: Path = objBasePath.with_name(objBasePath.name + "_success.txt")
     objErrorPath: Path = objBasePath.with_name(objBasePath.name + "_error.txt")
     pszText: str = (
-        "処理名:\nProductCodeSelector step0001～step0003\n\n"
+        "処理名:\nProductCodeSelector step0001～step0004\n\n"
         + "エラー:\n"
         + pszErrorMessage
         + "\n"
@@ -244,7 +244,10 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "元フォルダーで最終更新日時付きの名前へ変更します。\n"
             "templete_イズミ週間予定表.xlsxの作成日を更新し、\n"
             "step0002の納品日とその前日の出荷日を3地区へ設定し、\n"
-            "step0003のXLSXとA1:AB42のTSVを作成します。\n\n"
+            "step0003のXLSXとA1:AB42のTSVを作成します。\n"
+            "step0003の両ファイルを再読込し、\n"
+            "B12:C42、K12:L42、T12:U42の値を空欄にした\n"
+            "step0004のXLSXとTSVを作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
             "エラー時は_error.txtを出力します。"
@@ -454,12 +457,13 @@ def window_proc(
                 show_message_box(pszMessage, WINDOW_TITLE)
             else:
                 pszMessage += (
-                    "\n\nProductCodeSelector step0001～step0003を作成しました。"
+                    "\n\nProductCodeSelector step0001～step0004を作成しました。"
                     + "\n\n作成内容:"
                     + "\n・step0001 XLSX・TSV"
                     + "\n・step0002 XLSX・TSV"
                     + "\n・step0003 週間予定表XLSX・TSV"
                     + "\n・step0003 店舗別TSV 4ファイル"
+                    + "\n・step0004 XLSX・TSV"
                     + "\n\n詳細は各入力と同じフォルダーの"
                     + "_success.txtを確認してください。"
                 )
