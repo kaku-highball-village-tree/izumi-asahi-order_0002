@@ -65,11 +65,12 @@ SHIPMENT_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((8, 4), (8, 13), (8, 22
 DELIVERY_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((10, 4), (10, 13), (10, 22))
 SHIPMENT_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((9, 4), (9, 13), (9, 22))
 DELIVERY_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((11, 4), (11, 13), (11, 22))
-STEP0004_CLEAR_RANGES: tuple[tuple[int, int, int, int], ...] = (
-    (12, 42, 2, 3),
-    (12, 42, 11, 12),
-    (12, 42, 20, 21),
+STEP0004_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
+    ("広島", 12, 42, 2, 10),
+    ("岡山", 12, 42, 11, 19),
+    ("四国", 12, 42, 20, 28),
 )
+STEP0004_MAX_STORES_PER_AREA: int = 31
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
     (12, 14),
@@ -1429,7 +1430,7 @@ def get_cell_xml_span(bytesWorksheet: bytes, pszCellReference: str) -> tuple[int
         )
     objMatch: re.Match[bytes] = listMatches[0]
     bytesPrefix: bytes = objMatch.group("prefix") or b""
-    if objMatch.group("self_closing") == b"/":
+    if objMatch.group(0).rstrip().endswith(b"/>"):
         return objMatch.start(), objMatch.end(), bytesPrefix
     objClosingMatch: re.Match[bytes] | None = re.search(
         rb"</" + re.escape(bytesPrefix) + rb"c\s*>",
@@ -1837,80 +1838,186 @@ def validate_weekly_xlsx_tsv_match(
     return listTsvRows
 
 
-def clear_step0004_tsv_cells(listRows: list[list[str]]) -> list[list[str]]:
-    """B12:C42・K12:L42・T12:U42だけを空文字にします。"""
-    listOutputRows: list[list[str]] = [listRow.copy() for listRow in listRows]
-    for iStartRow, iEndRow, iStartColumn, iEndColumn in STEP0004_CLEAR_RANGES:
+def normalize_step0004_area_rows(
+    objAreaTsvPath: Path, pszAreaName: str
+) -> list[list[str]]:
+    """エリア別TSVを検証し、XLSXへ設定する9列の値へ正規化します。"""
+    if not objAreaTsvPath.is_file():
+        raise ValueError(
+            "step0003 " + pszAreaName + " TSVが見つかりません。Path = "
+            + str(objAreaTsvPath)
+        )
+    listRows, _ = read_tsv_table(objAreaTsvPath)
+    if len(listRows) > STEP0004_MAX_STORES_PER_AREA:
+        raise ValueError(
+            "step0003 "
+            + pszAreaName
+            + " TSVの店舗数が31店舗を超えています。店舗数 = "
+            + str(len(listRows))
+        )
+    listNormalizedRows: list[list[str]] = []
+    for iRow, listRow in enumerate(listRows, start=1):
+        if len(listRow) != 9:
+            raise ValueError(
+                "step0003 "
+                + pszAreaName
+                + " TSVに9列ではない行があります。行 = "
+                + str(iRow)
+            )
+        pszStoreCode: str = listRow[0].strip()
+        objStoreCodeMatch: re.Match[str] | None = re.fullmatch(
+            r"(\d+)(?:\.0+)?", pszStoreCode
+        )
+        if objStoreCodeMatch is None:
+            raise ValueError(
+                "step0003 "
+                + pszAreaName
+                + " TSVの店舗コードが整数ではありません。行 = "
+                + str(iRow)
+            )
+        pszStoreName: str = listRow[1].strip()
+        if not pszStoreName:
+            raise ValueError(
+                "step0003 "
+                + pszAreaName
+                + " TSVの店舗略称が空欄です。行 = "
+                + str(iRow)
+            )
+        listNormalizedQuantities: list[str] = []
+        for iColumn, pszRawQuantity in enumerate(listRow[2:], start=3):
+            pszQuantity: str = pszRawQuantity.strip()
+            if not pszQuantity:
+                listNormalizedQuantities.append("")
+                continue
+            if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
+                raise ValueError(
+                    "step0003 "
+                    + pszAreaName
+                    + " TSVの発注数量が整数ではありません。行 = "
+                    + str(iRow)
+                    + "、列 = "
+                    + str(iColumn)
+                )
+            iQuantity: int = int(pszQuantity)
+            listNormalizedQuantities.append(
+                "" if iQuantity == 0 else str(iQuantity)
+            )
+        listNormalizedRows.append(
+            [
+                str(int(objStoreCodeMatch.group(1))),
+                pszStoreName,
+                *listNormalizedQuantities,
+            ]
+        )
+    return listNormalizedRows
+
+
+def build_step0004_rows(
+    listStep0003Rows: list[list[str]],
+    tupleAreaRows: tuple[list[list[str]], list[list[str]], list[list[str]]],
+) -> list[list[str]]:
+    """3エリアの31行×9列を空欄化し、エリア別TSVを上から転記します。"""
+    listOutputRows: list[list[str]] = [listRow.copy() for listRow in listStep0003Rows]
+    for (
+        (_, iStartRow, iEndRow, iStartColumn, iEndColumn),
+        listAreaRows,
+    ) in zip(STEP0004_AREA_RANGES, tupleAreaRows):
+        if len(listAreaRows) > STEP0004_MAX_STORES_PER_AREA:
+            raise ValueError("step0004のエリア別店舗数が31店舗を超えています。")
         for iRow in range(iStartRow, iEndRow + 1):
             for iColumn in range(iStartColumn, iEndColumn + 1):
                 listOutputRows[iRow - 1][iColumn - 1] = ""
+        for iRowOffset, listAreaRow in enumerate(listAreaRows):
+            listOutputRows[iStartRow - 1 + iRowOffset][
+                iStartColumn - 1 : iEndColumn
+            ] = listAreaRow
     return listOutputRows
 
 
-def clear_cell_value_in_worksheet_xml(
-    bytesWorksheet: bytes, pszCellReference: str
+def set_cell_value_in_worksheet_xml(
+    bytesWorksheet: bytes, pszCellReference: str, pszValue: str, bNumeric: bool
 ) -> bytes:
-    """セル参照と属性を残し、指定セルの値を表す子要素だけを削除します。"""
-    bytesReference: bytes = re.escape(pszCellReference.encode("ascii"))
-    objCellPattern: re.Pattern[bytes] = re.compile(
-        rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
-        rb"(?P<attributes>[^<>]*\br\s*=\s*(?P<quote>[\"'])"
-        + bytesReference
-        + rb"(?P=quote)[^<>]*)(?P<self_closing>/?)>"
-    )
-    listMatches: list[re.Match[bytes]] = list(objCellPattern.finditer(bytesWorksheet))
-    if not listMatches:
-        return bytesWorksheet
-    if len(listMatches) != 1:
+    """既存セルと書式属性を残し、値だけを数値・文字列・空欄へ更新します。"""
+    iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, pszCellReference)
+    bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
+    iStartTagEnd: int = bytesOriginalCell.find(b">")
+    if iStartTagEnd < 0:
         raise ValueError(
             "「センター週間」シートの"
             + pszCellReference
-            + "セルを1つに特定できません。"
+            + "セル形式が不正です。"
         )
-    objMatch: re.Match[bytes] = listMatches[0]
-    if objMatch.group(0).rstrip().endswith(b"/>"):
-        return bytesWorksheet
-    bytesPrefix: bytes = objMatch.group("prefix") or b""
-    objClosingMatch: re.Match[bytes] | None = re.search(
-        rb"</" + re.escape(bytesPrefix) + rb"c\s*>",
-        bytesWorksheet[objMatch.end() :],
+    bytesStartTag: bytes = bytesOriginalCell[: iStartTagEnd + 1]
+    bytesStartTag = re.sub(
+        rb"\s+t\s*=\s*([\"'])[^\"']*\1", b"", bytesStartTag, count=1
     )
-    if objClosingMatch is None:
-        raise ValueError(
-            "「センター週間」シートの"
-            + pszCellReference
-            + "セルのXML終了要素がありません。"
+    if bytesStartTag.endswith(b"/>"):
+        bytesStartTag = bytesStartTag[:-2] + b">"
+    if not pszValue:
+        bytesNewContent: bytes = b""
+    elif bNumeric:
+        bytesNewContent = (
+            b"<" + bytesPrefix + b"v>" + pszValue.encode("ascii")
+            + b"</" + bytesPrefix + b"v>"
         )
-    iEnd: int = objMatch.end() + objClosingMatch.end()
-    bytesEmptyCell: bytes = (
-        bytesWorksheet[objMatch.start() : objMatch.end()]
-        + b"</"
-        + bytesPrefix
-        + b"c>"
+    else:
+        bytesStartTag = bytesStartTag[:-1] + b' t="inlineStr">'
+        pszEscapedValue: str = (
+            pszValue.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        bytesNewContent = (
+            b"<" + bytesPrefix + b"is><" + bytesPrefix + b"t>"
+            + pszEscapedValue.encode("utf-8")
+            + b"</" + bytesPrefix + b"t></" + bytesPrefix + b"is>"
+        )
+    bytesNewCell: bytes = (
+        bytesStartTag + bytesNewContent + b"</" + bytesPrefix + b"c>"
     )
-    return bytesWorksheet[: objMatch.start()] + bytesEmptyCell + bytesWorksheet[iEnd:]
+    return bytesWorksheet[:iStart] + bytesNewCell + bytesWorksheet[iEnd:]
 
 
-def clear_step0004_cells_in_worksheet_xml(bytesWorksheet: bytes) -> bytes:
-    """step0004で指定された186セルの値だけを削除します。"""
-    for iStartRow, iEndRow, iStartColumn, iEndColumn in STEP0004_CLEAR_RANGES:
+def update_step0004_cells_in_worksheet_xml(
+    bytesWorksheet: bytes,
+    tupleAreaRows: tuple[list[list[str]], list[list[str]], list[list[str]]],
+) -> bytes:
+    """3エリアの店舗コード・略称・月～日数量をセル値だけ更新します。"""
+    for (
+        (_, iStartRow, iEndRow, iStartColumn, iEndColumn),
+        listAreaRows,
+    ) in zip(STEP0004_AREA_RANGES, tupleAreaRows):
         for iRow in range(iStartRow, iEndRow + 1):
+            iAreaRow: int = iRow - iStartRow
             for iColumn in range(iStartColumn, iEndColumn + 1):
-                bytesWorksheet = clear_cell_value_in_worksheet_xml(
-                    bytesWorksheet, get_column_letter(iColumn) + str(iRow)
+                iAreaColumn: int = iColumn - iStartColumn
+                pszValue: str = (
+                    listAreaRows[iAreaRow][iAreaColumn]
+                    if iAreaRow < len(listAreaRows)
+                    else ""
+                )
+                bytesWorksheet = set_cell_value_in_worksheet_xml(
+                    bytesWorksheet,
+                    get_column_letter(iColumn) + str(iRow),
+                    pszValue,
+                    bNumeric=iAreaColumn != 1 and bool(pszValue),
                 )
     return bytesWorksheet
 
 
-def save_step0004_xlsx(objStep0003Path: Path, objStep0004Path: Path) -> str:
-    """step0003の描画・書式を保ち、指定セルだけ空欄にして保存します。"""
+def save_step0004_xlsx(
+    objStep0003Path: Path,
+    objStep0004Path: Path,
+    tupleAreaRows: tuple[list[list[str]], list[list[str]], list[list[str]]],
+) -> str:
+    """step0003の描画・書式を保ち、3エリアのセル値だけ更新します。"""
     with zipfile.ZipFile(objStep0003Path, mode="r") as objSourceArchive:
         pszWorksheetPart: str = get_weekly_worksheet_part_name(objSourceArchive)
         bytesWorksheet: bytes = get_zip_member_bytes(
             objSourceArchive, pszWorksheetPart
         )
-        bytesUpdatedWorksheet: bytes = clear_step0004_cells_in_worksheet_xml(
-            bytesWorksheet
+        bytesUpdatedWorksheet: bytes = update_step0004_cells_in_worksheet_xml(
+            bytesWorksheet, tupleAreaRows
         )
         with zipfile.ZipFile(objStep0004Path, mode="w") as objOutputArchive:
             objOutputArchive.comment = objSourceArchive.comment
@@ -1925,7 +2032,10 @@ def save_step0004_xlsx(objStep0003Path: Path, objStep0004Path: Path) -> str:
 
 
 def validate_step0004_xlsx_parts(
-    objStep0003Path: Path, objStep0004Path: Path, pszWorksheetPart: str
+    objStep0003Path: Path,
+    objStep0004Path: Path,
+    pszWorksheetPart: str,
+    tupleAreaRows: tuple[list[list[str]], list[list[str]], list[list[str]]],
 ) -> None:
     """対象セル値以外のXLSX内部データが変わっていないことを確認します。"""
     with zipfile.ZipFile(objStep0003Path, mode="r") as objSourceArchive:
@@ -1941,7 +2051,7 @@ def validate_step0004_xlsx_parts(
             for pszMemberName in listSourceNames:
                 bytesSource: bytes = objSourceArchive.read(pszMemberName)
                 bytesExpected: bytes = (
-                    clear_step0004_cells_in_worksheet_xml(bytesSource)
+                    update_step0004_cells_in_worksheet_xml(bytesSource, tupleAreaRows)
                     if pszMemberName == pszWorksheetPart
                     else bytesSource
                 )
@@ -1957,27 +2067,20 @@ def validate_step0004_outputs(
     objTsvPath: Path,
     listExpectedRows: list[list[str]],
 ) -> None:
-    """step0004 XLSX・TSVと空欄範囲を保存後に確認します。"""
+    """step0004 XLSX・TSVと3エリアの転記内容を保存後に確認します。"""
     listTsvRows: list[list[str]] = validate_weekly_xlsx_tsv_match(
         objExcelPath, objTsvPath, "step0004"
     )
     if listTsvRows != listExpectedRows:
         raise ValueError("step0004 TSVが期待するA1:AB42と一致しません。")
-    for iStartRow, iEndRow, iStartColumn, iEndColumn in STEP0004_CLEAR_RANGES:
-        for iRow in range(iStartRow, iEndRow + 1):
-            for iColumn in range(iStartColumn, iEndColumn + 1):
-                if listTsvRows[iRow - 1][iColumn - 1] != "":
-                    raise ValueError(
-                        "step0004の空欄対象セルに値があります。セル = "
-                        + get_column_letter(iColumn)
-                        + str(iRow)
-                    )
 
 
 def create_step0004_outputs(
-    objStep0003ExcelPath: Path, objStep0003TsvPath: Path
+    objStep0003ExcelPath: Path,
+    objStep0003TsvPath: Path,
+    tupleAreaTsvPaths: tuple[Path, Path, Path],
 ) -> tuple[Path, Path]:
-    """step0003ペアを再読込し、店舗欄を空欄にしたstep0004を作ります。"""
+    """step0003ペアと3つのエリア別TSVからstep0004を作ります。"""
     if not objStep0003ExcelPath.is_file() or not objStep0003TsvPath.is_file():
         raise ValueError("step0003のXLSXとTSVの両方が必要です。")
     objStep0004ExcelPath, objStep0004TsvPath = get_step0004_output_paths(
@@ -1986,21 +2089,30 @@ def create_step0004_outputs(
     listStep0003Rows: list[list[str]] = validate_weekly_xlsx_tsv_match(
         objStep0003ExcelPath, objStep0003TsvPath, "step0003"
     )
-    listStep0004Rows: list[list[str]] = clear_step0004_tsv_cells(
-        listStep0003Rows
+    tupleAreaRows: tuple[list[list[str]], list[list[str]], list[list[str]]] = tuple(
+        normalize_step0004_area_rows(objAreaPath, pszAreaName)
+        for objAreaPath, pszAreaName in zip(
+            tupleAreaTsvPaths, ("広島", "岡山", "四国")
+        )
+    )
+    listStep0004Rows: list[list[str]] = build_step0004_rows(
+        listStep0003Rows, tupleAreaRows
     )
     objTemporaryExcelPath: Path = create_temporary_path(objStep0004ExcelPath)
     objTemporaryTsvPath: Path = create_temporary_path(objStep0004TsvPath)
     try:
         pszWorksheetPart: str = save_step0004_xlsx(
-            objStep0003ExcelPath, objTemporaryExcelPath
+            objStep0003ExcelPath, objTemporaryExcelPath, tupleAreaRows
         )
         save_tsv_table(objTemporaryTsvPath, listStep0004Rows)
         validate_step0004_outputs(
             objTemporaryExcelPath, objTemporaryTsvPath, listStep0004Rows
         )
         validate_step0004_xlsx_parts(
-            objStep0003ExcelPath, objTemporaryExcelPath, pszWorksheetPart
+            objStep0003ExcelPath,
+            objTemporaryExcelPath,
+            pszWorksheetPart,
+            tupleAreaRows,
         )
         replace_output_pair(
             objTemporaryExcelPath,
@@ -2357,7 +2469,9 @@ def process_input_file(
         objStep0002ExcelPath, objStep0002TsvPath
     )
     objStep0004ExcelPath, objStep0004TsvPath = create_step0004_outputs(
-        objStep0003ExcelPath, objStep0003TsvPath
+        objStep0003ExcelPath,
+        objStep0003TsvPath,
+        (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
     )
     return (
         objExcelOutputPath,
