@@ -1935,9 +1935,39 @@ def build_step0004_rows(
 
 
 def set_cell_value_in_worksheet_xml(
-    bytesWorksheet: bytes, pszCellReference: str, pszValue: str, bNumeric: bool
+    bytesWorksheet: bytes,
+    pszCellReference: str,
+    pszValue: str,
+    bNumeric: bool,
+    iAreaStartRow: int,
+    iAreaEndRow: int,
 ) -> bytes:
-    """既存セルと書式属性を残し、値だけを数値・文字列・空欄へ更新します。"""
+    """既存セルを更新し、値がある未作成セルは同列の書式で挿入します。"""
+    bytesReference: bytes = re.escape(pszCellReference.encode("ascii"))
+    objCellPattern: re.Pattern[bytes] = re.compile(
+        rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
+        rb"(?P<attributes>[^<>]*\br\s*=\s*(?P<quote>[\"'])"
+        + bytesReference
+        + rb"(?P=quote)[^<>]*)(?P<self_closing>/?)>"
+    )
+    listMatches: list[re.Match[bytes]] = list(objCellPattern.finditer(bytesWorksheet))
+    if len(listMatches) > 1:
+        raise ValueError(
+            "「センター週間」シートの"
+            + pszCellReference
+            + "セルが重複しています。"
+        )
+    if not listMatches:
+        if not pszValue:
+            return bytesWorksheet
+        return insert_cell_value_in_worksheet_xml(
+            bytesWorksheet,
+            pszCellReference,
+            pszValue,
+            bNumeric,
+            iAreaStartRow,
+            iAreaEndRow,
+        )
     iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, pszCellReference)
     bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
     iStartTagEnd: int = bytesOriginalCell.find(b">")
@@ -1978,6 +2008,182 @@ def set_cell_value_in_worksheet_xml(
     return bytesWorksheet[:iStart] + bytesNewCell + bytesWorksheet[iEnd:]
 
 
+def get_cell_style_for_new_cell(
+    bytesWorksheet: bytes,
+    pszColumnLetters: str,
+    iTargetRow: int,
+    iAreaStartRow: int,
+    iAreaEndRow: int,
+) -> tuple[bytes, bytes]:
+    """同列・同エリアで最も近い既存セルの接頭辞とs属性値を返します。"""
+    for iDistance in range(1, iAreaEndRow - iAreaStartRow + 1):
+        for iCandidateRow in (iTargetRow - iDistance, iTargetRow + iDistance):
+            if not iAreaStartRow <= iCandidateRow <= iAreaEndRow:
+                continue
+            pszCandidateReference: str = pszColumnLetters + str(iCandidateRow)
+            bytesCandidateReference: bytes = re.escape(
+                pszCandidateReference.encode("ascii")
+            )
+            objCandidatePattern: re.Pattern[bytes] = re.compile(
+                rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
+                rb"(?P<attributes>[^<>]*\br\s*=\s*(?P<quote>[\"'])"
+                + bytesCandidateReference
+                + rb"(?P=quote)[^<>]*)(?:/?)>"
+            )
+            listCandidateMatches: list[re.Match[bytes]] = list(
+                objCandidatePattern.finditer(bytesWorksheet)
+            )
+            if len(listCandidateMatches) > 1:
+                raise ValueError(
+                    "「センター週間」シートの"
+                    + pszCandidateReference
+                    + "セルが重複しています。"
+                )
+            if not listCandidateMatches:
+                continue
+            objStyleMatch: re.Match[bytes] | None = re.search(
+                rb"\bs\s*=\s*([\"'])(?P<style>[^\"']+)\1",
+                listCandidateMatches[0].group("attributes"),
+            )
+            if objStyleMatch is not None:
+                return (
+                    listCandidateMatches[0].group("prefix") or b"",
+                    objStyleMatch.group("style"),
+                )
+    raise ValueError(
+        "「センター週間」シートの"
+        + pszColumnLetters
+        + str(iTargetRow)
+        + "セルを新規作成するためのスタイル取得元が見つかりません。"
+        + "検索範囲 = "
+        + pszColumnLetters
+        + str(iAreaStartRow)
+        + ":"
+        + pszColumnLetters
+        + str(iAreaEndRow)
+    )
+
+
+def insert_cell_value_in_worksheet_xml(
+    bytesWorksheet: bytes,
+    pszCellReference: str,
+    pszValue: str,
+    bNumeric: bool,
+    iAreaStartRow: int,
+    iAreaEndRow: int,
+) -> bytes:
+    """存在しないセルを対象行の列順へ、近傍セルのs属性付きで挿入します。"""
+    objReferenceMatch: re.Match[str] | None = re.fullmatch(
+        r"([A-Z]+)(\d+)", pszCellReference
+    )
+    if objReferenceMatch is None:
+        raise ValueError("新規作成するセル参照が不正です。セル = " + pszCellReference)
+    pszColumnLetters: str = objReferenceMatch.group(1)
+    iTargetRow: int = int(objReferenceMatch.group(2))
+    bytesPrefix, bytesStyle = get_cell_style_for_new_cell(
+        bytesWorksheet,
+        pszColumnLetters,
+        iTargetRow,
+        iAreaStartRow,
+        iAreaEndRow,
+    )
+    bytesRowNumber: bytes = re.escape(str(iTargetRow).encode("ascii"))
+    objRowPattern: re.Pattern[bytes] = re.compile(
+        rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?row\b"
+        rb"[^<>]*\br\s*=\s*(?P<quote>[\"'])"
+        + bytesRowNumber
+        + rb"(?P=quote)[^<>]*>"
+    )
+    listRowMatches: list[re.Match[bytes]] = list(objRowPattern.finditer(bytesWorksheet))
+    if len(listRowMatches) != 1:
+        raise ValueError(
+            "「センター週間」シートの"
+            + str(iTargetRow)
+            + "行目のXML要素を1つに特定できません。セル = "
+            + pszCellReference
+        )
+    objRowMatch: re.Match[bytes] = listRowMatches[0]
+    bytesRowPrefix: bytes = objRowMatch.group("prefix") or b""
+    objRowClosingMatch: re.Match[bytes] | None = re.search(
+        rb"</" + re.escape(bytesRowPrefix) + rb"row\s*>",
+        bytesWorksheet[objRowMatch.end() :],
+    )
+    if objRowClosingMatch is None:
+        raise ValueError(
+            "「センター週間」シートの"
+            + str(iTargetRow)
+            + "行目のXML終了要素がありません。"
+        )
+    iRowEnd: int = objRowMatch.end() + objRowClosingMatch.start()
+    iTargetColumn: int = 0
+    for pszCharacter in pszColumnLetters:
+        iTargetColumn = iTargetColumn * 26 + ord(pszCharacter) - ord("A") + 1
+    objAnyCellPattern: re.Pattern[bytes] = re.compile(
+        rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
+        rb"[^<>]*\br\s*=\s*([\"'])(?P<reference>[A-Z]+\d+)\2[^<>]*(?:/?)>"
+    )
+    iInsertionPoint: int = iRowEnd
+    for objCellMatch in objAnyCellPattern.finditer(
+        bytesWorksheet, objRowMatch.end(), iRowEnd
+    ):
+        objCellReferenceMatch: re.Match[bytes] | None = re.fullmatch(
+            rb"([A-Z]+)(\d+)", objCellMatch.group("reference")
+        )
+        if objCellReferenceMatch is None:
+            continue
+        iCellColumn: int = 0
+        for iCharacter in objCellReferenceMatch.group(1):
+            iCellColumn = iCellColumn * 26 + iCharacter - ord("A") + 1
+        if iCellColumn > iTargetColumn:
+            iInsertionPoint = objCellMatch.start()
+            break
+    bytesCellStart: bytes = (
+        b"<"
+        + bytesPrefix
+        + b'c r="'
+        + pszCellReference.encode("ascii")
+        + b'" s="'
+        + bytesStyle
+        + b'"'
+    )
+    if bNumeric:
+        bytesNewCell: bytes = (
+            bytesCellStart
+            + b"><"
+            + bytesPrefix
+            + b"v>"
+            + pszValue.encode("ascii")
+            + b"</"
+            + bytesPrefix
+            + b"v></"
+            + bytesPrefix
+            + b"c>"
+        )
+    else:
+        pszEscapedValue: str = (
+            pszValue.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        bytesNewCell = (
+            bytesCellStart
+            + b' t="inlineStr"><'
+            + bytesPrefix
+            + b"is><"
+            + bytesPrefix
+            + b"t>"
+            + pszEscapedValue.encode("utf-8")
+            + b"</"
+            + bytesPrefix
+            + b"t></"
+            + bytesPrefix
+            + b"is></"
+            + bytesPrefix
+            + b"c>"
+        )
+    return bytesWorksheet[:iInsertionPoint] + bytesNewCell + bytesWorksheet[iInsertionPoint:]
+
+
 def update_step0004_cells_in_worksheet_xml(
     bytesWorksheet: bytes,
     tupleAreaRows: tuple[list[list[str]], list[list[str]], list[list[str]]],
@@ -2001,6 +2207,8 @@ def update_step0004_cells_in_worksheet_xml(
                     get_column_letter(iColumn) + str(iRow),
                     pszValue,
                     bNumeric=iAreaColumn != 1 and bool(pszValue),
+                    iAreaStartRow=iStartRow,
+                    iAreaEndRow=iEndRow,
                 )
     return bytesWorksheet
 
