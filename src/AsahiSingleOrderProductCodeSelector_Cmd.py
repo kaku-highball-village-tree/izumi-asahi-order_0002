@@ -2105,9 +2105,56 @@ def get_cell_style_for_new_cell(
                 if tupleStyle is not None:
                     return tupleStyle
 
+    # 第4・第5段階: 同じエリアの数量列を列距離順（同距離は左優先）で検索。
+    tupleAreaQuantityColumns: tuple[int, ...] = ()
+    for _, _, _, iAreaStartColumn, iAreaEndColumn in STEP0004_AREA_RANGES:
+        if iAreaStartColumn <= iTargetColumn <= iAreaEndColumn:
+            iFirstQuantityColumn: int = iAreaStartColumn + 2
+            if iFirstQuantityColumn <= iTargetColumn <= iAreaEndColumn:
+                tupleAreaQuantityColumns = tuple(
+                    sorted(
+                        (
+                            iColumn
+                            for iColumn in range(
+                                iFirstQuantityColumn, iAreaEndColumn + 1
+                            )
+                            if iColumn != iTargetColumn
+                        ),
+                        key=lambda iColumn: (
+                            abs(iColumn - iTargetColumn),
+                            0 if iColumn < iTargetColumn else 1,
+                        ),
+                    )
+                )
+            break
+    for iCandidateColumn in tupleAreaQuantityColumns:
+        tupleStyle = get_candidate_style(iCandidateColumn, iTargetRow)
+        if tupleStyle is not None:
+            return tupleStyle
+        for iDistance in range(1, iAreaEndRow - iAreaStartRow + 1):
+            for iCandidateRow in (
+                iTargetRow - iDistance,
+                iTargetRow + iDistance,
+            ):
+                if not iAreaStartRow <= iCandidateRow <= iAreaEndRow:
+                    continue
+                tupleStyle = get_candidate_style(
+                    iCandidateColumn, iCandidateRow
+                )
+                if tupleStyle is not None:
+                    return tupleStyle
+
     pszRoleColumns: str = "、".join(
         get_column_letter(iColumn) for iColumn in tupleRoleColumns
     )
+    pszQuantityColumnsDetail: str = ""
+    if tupleAreaQuantityColumns:
+        pszQuantityColumnsDetail = "、同一エリア数量列 = " + "、".join(
+            get_column_letter(iColumn)
+            for iColumn in sorted(
+                (*tupleAreaQuantityColumns, iTargetColumn)
+            )
+        )
     raise ValueError(
         "「センター週間」シートの"
         + pszColumnLetters
@@ -2115,6 +2162,7 @@ def get_cell_style_for_new_cell(
         + "セルを新規作成するためのスタイル取得元が見つかりません。"
         + "検索列 = "
         + pszRoleColumns
+        + pszQuantityColumnsDetail
         + "、検索行 = "
         + str(iAreaStartRow)
         + "～"
