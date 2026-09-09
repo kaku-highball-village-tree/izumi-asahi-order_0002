@@ -70,6 +70,10 @@ STEP0004_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
     ("岡山", 12, 42, 11, 19),
     ("四国", 12, 42, 20, 28),
 )
+STEP0004_ROLE_COLUMNS: tuple[tuple[int, int, int], ...] = tuple(
+    tuple(iStartColumn + iOffset for _, _, _, iStartColumn, _ in STEP0004_AREA_RANGES)
+    for iOffset in range(9)
+)
 STEP0004_MAX_STORES_PER_AREA: int = 31
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
@@ -2015,51 +2019,105 @@ def get_cell_style_for_new_cell(
     iAreaStartRow: int,
     iAreaEndRow: int,
 ) -> tuple[bytes, bytes]:
-    """同列・同エリアで最も近い既存セルの接頭辞とs属性値を返します。"""
+    """同列を優先し、同じ役割の他エリア列も使ってs属性を返します。"""
+    iTargetColumn: int = 0
+    for pszCharacter in pszColumnLetters:
+        iTargetColumn = iTargetColumn * 26 + ord(pszCharacter) - ord("A") + 1
+    tupleRoleColumns: tuple[int, int, int] | None = next(
+        (
+            tupleColumns
+            for tupleColumns in STEP0004_ROLE_COLUMNS
+            if iTargetColumn in tupleColumns
+        ),
+        None,
+    )
+    if tupleRoleColumns is None:
+        raise ValueError(
+            "新規作成するセルがstep0004の転記列ではありません。セル = "
+            + pszColumnLetters
+            + str(iTargetRow)
+        )
+
+    def get_candidate_style(
+        iCandidateColumn: int, iCandidateRow: int
+    ) -> tuple[bytes, bytes] | None:
+        pszCandidateReference: str = (
+            get_column_letter(iCandidateColumn) + str(iCandidateRow)
+        )
+        bytesCandidateReference: bytes = re.escape(
+            pszCandidateReference.encode("ascii")
+        )
+        objCandidatePattern: re.Pattern[bytes] = re.compile(
+            rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
+            rb"(?P<attributes>[^<>]*\br\s*=\s*(?P<quote>[\"'])"
+            + bytesCandidateReference
+            + rb"(?P=quote)[^<>]*)(?:/?)>"
+        )
+        listCandidateMatches: list[re.Match[bytes]] = list(
+            objCandidatePattern.finditer(bytesWorksheet)
+        )
+        if len(listCandidateMatches) > 1:
+            raise ValueError(
+                "「センター週間」シートの"
+                + pszCandidateReference
+                + "セルが重複しています。"
+            )
+        if not listCandidateMatches:
+            return None
+        objStyleMatch: re.Match[bytes] | None = re.search(
+            rb"\bs\s*=\s*([\"'])(?P<style>[^\"']+)\1",
+            listCandidateMatches[0].group("attributes"),
+        )
+        if objStyleMatch is None:
+            return None
+        return (
+            listCandidateMatches[0].group("prefix") or b"",
+            objStyleMatch.group("style"),
+        )
+
+    # 第1段階: 同じ列・同じ転記範囲で、上側を優先して最も近いセル。
     for iDistance in range(1, iAreaEndRow - iAreaStartRow + 1):
         for iCandidateRow in (iTargetRow - iDistance, iTargetRow + iDistance):
             if not iAreaStartRow <= iCandidateRow <= iAreaEndRow:
                 continue
-            pszCandidateReference: str = pszColumnLetters + str(iCandidateRow)
-            bytesCandidateReference: bytes = re.escape(
-                pszCandidateReference.encode("ascii")
+            tupleStyle: tuple[bytes, bytes] | None = get_candidate_style(
+                iTargetColumn, iCandidateRow
             )
-            objCandidatePattern: re.Pattern[bytes] = re.compile(
-                rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?c\b"
-                rb"(?P<attributes>[^<>]*\br\s*=\s*(?P<quote>[\"'])"
-                + bytesCandidateReference
-                + rb"(?P=quote)[^<>]*)(?:/?)>"
-            )
-            listCandidateMatches: list[re.Match[bytes]] = list(
-                objCandidatePattern.finditer(bytesWorksheet)
-            )
-            if len(listCandidateMatches) > 1:
-                raise ValueError(
-                    "「センター週間」シートの"
-                    + pszCandidateReference
-                    + "セルが重複しています。"
-                )
-            if not listCandidateMatches:
+            if tupleStyle is not None:
+                return tupleStyle
+
+    tupleOtherRoleColumns: tuple[int, ...] = tuple(
+        iColumn for iColumn in tupleRoleColumns if iColumn != iTargetColumn
+    )
+    # 第2段階: エリア固定順で、他エリアの同じ役割・同じ行。
+    for iCandidateColumn in tupleOtherRoleColumns:
+        tupleStyle = get_candidate_style(iCandidateColumn, iTargetRow)
+        if tupleStyle is not None:
+            return tupleStyle
+
+    # 第3段階: 他エリアの同じ役割で、距離、上側、エリア固定順を優先。
+    for iDistance in range(1, iAreaEndRow - iAreaStartRow + 1):
+        for iCandidateRow in (iTargetRow - iDistance, iTargetRow + iDistance):
+            if not iAreaStartRow <= iCandidateRow <= iAreaEndRow:
                 continue
-            objStyleMatch: re.Match[bytes] | None = re.search(
-                rb"\bs\s*=\s*([\"'])(?P<style>[^\"']+)\1",
-                listCandidateMatches[0].group("attributes"),
-            )
-            if objStyleMatch is not None:
-                return (
-                    listCandidateMatches[0].group("prefix") or b"",
-                    objStyleMatch.group("style"),
-                )
+            for iCandidateColumn in tupleOtherRoleColumns:
+                tupleStyle = get_candidate_style(iCandidateColumn, iCandidateRow)
+                if tupleStyle is not None:
+                    return tupleStyle
+
+    pszRoleColumns: str = "、".join(
+        get_column_letter(iColumn) for iColumn in tupleRoleColumns
+    )
     raise ValueError(
         "「センター週間」シートの"
         + pszColumnLetters
         + str(iTargetRow)
         + "セルを新規作成するためのスタイル取得元が見つかりません。"
-        + "検索範囲 = "
-        + pszColumnLetters
+        + "検索列 = "
+        + pszRoleColumns
+        + "、検索行 = "
         + str(iAreaStartRow)
-        + ":"
-        + pszColumnLetters
+        + "～"
         + str(iAreaEndRow)
     )
 
