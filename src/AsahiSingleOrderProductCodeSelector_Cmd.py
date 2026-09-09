@@ -74,7 +74,7 @@ STEP0004_ROLE_COLUMNS: tuple[tuple[int, int, int], ...] = tuple(
     tuple(iStartColumn + iOffset for _, _, _, iStartColumn, _ in STEP0004_AREA_RANGES)
     for iOffset in range(9)
 )
-STEP0004_MAX_STORES_PER_AREA: int = 31
+STEP0004_MAX_STORES_PER_AREA: int = 30
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
     (12, 14),
@@ -1856,7 +1856,9 @@ def normalize_step0004_area_rows(
         raise ValueError(
             "step0003 "
             + pszAreaName
-            + " TSVの店舗数が31店舗を超えています。店舗数 = "
+            + " TSVの店舗数が"
+            + str(STEP0004_MAX_STORES_PER_AREA)
+            + "店舗を超えています。店舗数 = "
             + str(len(listRows))
         )
     listNormalizedRows: list[list[str]] = []
@@ -1927,7 +1929,11 @@ def build_step0004_rows(
         listAreaRows,
     ) in zip(STEP0004_AREA_RANGES, tupleAreaRows):
         if len(listAreaRows) > STEP0004_MAX_STORES_PER_AREA:
-            raise ValueError("step0004のエリア別店舗数が31店舗を超えています。")
+            raise ValueError(
+                "step0004のエリア別店舗数が"
+                + str(STEP0004_MAX_STORES_PER_AREA)
+                + "店舗を超えています。"
+            )
         for iRow in range(iStartRow, iEndRow + 1):
             for iColumn in range(iStartColumn, iEndColumn + 1):
                 listOutputRows[iRow - 1][iColumn - 1] = ""
