@@ -22,7 +22,7 @@ import win32gui
 WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0004 (Drag & Drop)"
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
-WEEKLY_TEMPLATE_FILE_NAME: str = "templete_イズミ週間予定表.xlsx"
+WEEKLY_TEMPLATE_FILE_NAME: str = "template_イズミ週間予定表_3列.xlsx"
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 DISPLAY_FILE_LIMIT: int = 10
 
@@ -242,7 +242,7 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "全店舗・広島・岡山・四国の店舗別TSVを作成します。\n"
             "既存の店舗別TSVは%TEMP%へコピー後、\n"
             "元フォルダーで最終更新日時付きの名前へ変更します。\n"
-            "templete_イズミ週間予定表.xlsxの作成日を更新し、\n"
+            "template_イズミ週間予定表_3列.xlsxの作成日を更新し、\n"
             "step0002の納品日とその前日の出荷日を3地区へ設定し、\n"
             "step0003のXLSXとA1:AB42のTSVを作成します。\n"
             "step0003の週間予定表とエリア別TSVを再読込し、\n"
