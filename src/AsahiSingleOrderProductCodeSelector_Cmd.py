@@ -1647,6 +1647,32 @@ def get_excel_date_epoch(objArchive: zipfile.ZipFile) -> date:
     return date(1904, 1, 1) if pszDate1904 in ("1", "true") else date(1899, 12, 30)
 
 
+def get_cell_xfs_count(objArchive: zipfile.ZipFile) -> int:
+    """styles.xmlに定義されたセル書式の件数を返します。"""
+    objStylesRoot: ET.Element = ET.fromstring(
+        get_zip_member_bytes(objArchive, "xl/styles.xml")
+    )
+    listCellXfs: list[ET.Element] = [
+        objElement
+        for objElement in objStylesRoot.iter()
+        if get_xml_local_name(objElement.tag) == "cellXfs"
+    ]
+    if len(listCellXfs) != 1:
+        raise ValueError("XLSX内のcellXfsを1つに特定できません。")
+    iActualCount: int = sum(
+        get_xml_local_name(objElement.tag) == "xf"
+        for objElement in listCellXfs[0]
+    )
+    pszDeclaredCount: str = listCellXfs[0].attrib.get("count", "")
+    if pszDeclaredCount and (
+        not pszDeclaredCount.isdigit() or int(pszDeclaredCount) != iActualCount
+    ):
+        raise ValueError("XLSX内のcellXfs件数がcount属性と一致しません。")
+    if iActualCount == 0:
+        raise ValueError("XLSX内のcellXfsが空です。")
+    return iActualCount
+
+
 def update_weekly_dates_in_worksheet_xml(
     bytesWorksheet: bytes,
     listDeliveryDates: list[date],
@@ -2128,6 +2154,7 @@ def set_cell_value_in_worksheet_xml(
     bNumeric: bool,
     iAreaStartRow: int,
     iAreaEndRow: int,
+    iCellXfsCount: int,
 ) -> bytes:
     """既存セルを更新し、値がある未作成セルは同列の書式で挿入します。"""
     bytesReference: bytes = re.escape(pszCellReference.encode("ascii"))
@@ -2152,6 +2179,7 @@ def set_cell_value_in_worksheet_xml(
             bNumeric,
             iAreaStartRow,
             iAreaEndRow,
+            iCellXfsCount,
         )
     iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, pszCellReference)
     bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
@@ -2193,12 +2221,85 @@ def set_cell_value_in_worksheet_xml(
     return bytesWorksheet[:iStart] + bytesNewCell + bytesWorksheet[iEnd:]
 
 
+def get_worksheet_xml_prefix(bytesWorksheet: bytes) -> bytes:
+    """worksheet内で使用されている要素名の接頭辞を返します。"""
+    objElementMatch: re.Match[bytes] | None = re.search(
+        rb"<(?P<prefix>[A-Za-z_][\w.-]*:)?(?:row|c)\b", bytesWorksheet
+    )
+    return (objElementMatch.group("prefix") or b"") if objElementMatch else b""
+
+
+def validate_cell_style_index(pszStyle: str, iCellXfsCount: int, pszSource: str) -> bytes:
+    """セル書式番号がcellXfsの有効範囲内であることを確認します。"""
+    if not pszStyle.isdigit() or int(pszStyle) >= iCellXfsCount:
+        raise ValueError(
+            pszSource
+            + "のスタイル番号がXLSX内のcellXfsの範囲外です。style = "
+            + repr(pszStyle)
+        )
+    return pszStyle.encode("ascii")
+
+
+def get_column_style_for_new_cell(
+    bytesWorksheet: bytes, iTargetColumn: int, iCellXfsCount: int
+) -> tuple[bytes, bytes] | None:
+    """対象列を包含する最も具体的なcol要素のstyleを返します。"""
+    objRoot: ET.Element = ET.fromstring(bytesWorksheet)
+    listCandidates: list[tuple[int, int, str]] = []
+    for iOrder, objElement in enumerate(objRoot.iter()):
+        if get_xml_local_name(objElement.tag) != "col":
+            continue
+        pszMinimum: str = objElement.attrib.get("min", "")
+        pszMaximum: str = objElement.attrib.get("max", "")
+        if not pszMinimum.isdigit() or not pszMaximum.isdigit():
+            continue
+        iMinimum: int = int(pszMinimum)
+        iMaximum: int = int(pszMaximum)
+        if iMinimum <= iTargetColumn <= iMaximum and "style" in objElement.attrib:
+            listCandidates.append(
+                (iMaximum - iMinimum, iOrder, objElement.attrib["style"])
+            )
+    if not listCandidates:
+        return None
+    _, _, pszStyle = min(listCandidates, key=lambda tupleValue: (tupleValue[0], -tupleValue[1]))
+    return (
+        get_worksheet_xml_prefix(bytesWorksheet),
+        validate_cell_style_index(pszStyle, iCellXfsCount, "対象列"),
+    )
+
+
+def get_row_style_for_new_cell(
+    bytesWorksheet: bytes, iTargetRow: int, iCellXfsCount: int
+) -> tuple[bytes, bytes] | None:
+    """対象行に明示された有効なrow styleを返します。"""
+    objRoot: ET.Element = ET.fromstring(bytesWorksheet)
+    listRows: list[ET.Element] = [
+        objElement
+        for objElement in objRoot.iter()
+        if get_xml_local_name(objElement.tag) == "row"
+        and objElement.attrib.get("r") == str(iTargetRow)
+    ]
+    if len(listRows) != 1:
+        return None
+    objRow: ET.Element = listRows[0]
+    if objRow.attrib.get("customFormat", "0").lower() not in ("1", "true"):
+        return None
+    pszStyle: str | None = objRow.attrib.get("s")
+    if pszStyle is None:
+        return None
+    return (
+        get_worksheet_xml_prefix(bytesWorksheet),
+        validate_cell_style_index(pszStyle, iCellXfsCount, "対象行"),
+    )
+
+
 def get_cell_style_for_new_cell(
     bytesWorksheet: bytes,
     pszColumnLetters: str,
     iTargetRow: int,
     iAreaStartRow: int,
     iAreaEndRow: int,
+    iCellXfsCount: int,
 ) -> tuple[bytes, bytes]:
     """同列を優先し、同じ役割の他エリア列も使ってs属性を返します。"""
     iTargetColumn: int = 0
@@ -2218,6 +2319,17 @@ def get_cell_style_for_new_cell(
             + pszColumnLetters
             + str(iTargetRow)
         )
+
+    tupleColumnStyle: tuple[bytes, bytes] | None = get_column_style_for_new_cell(
+        bytesWorksheet, iTargetColumn, iCellXfsCount
+    )
+    if tupleColumnStyle is not None:
+        return tupleColumnStyle
+    tupleRowStyle: tuple[bytes, bytes] | None = get_row_style_for_new_cell(
+        bytesWorksheet, iTargetRow, iCellXfsCount
+    )
+    if tupleRowStyle is not None:
+        return tupleRowStyle
 
     def get_candidate_style(
         iCandidateColumn: int, iCandidateRow: int
@@ -2253,7 +2365,11 @@ def get_cell_style_for_new_cell(
             return None
         return (
             listCandidateMatches[0].group("prefix") or b"",
-            objStyleMatch.group("style"),
+            validate_cell_style_index(
+                objStyleMatch.group("style").decode("ascii"),
+                iCellXfsCount,
+                "候補セル" + pszCandidateReference,
+            ),
         )
 
     # 第1段階: 同じ列・同じ転記範囲で、上側を優先して最も近いセル。
@@ -2337,6 +2453,7 @@ def get_cell_style_for_new_cell(
         + pszColumnLetters
         + str(iTargetRow)
         + "セルを新規作成するためのスタイル取得元が見つかりません。"
+        + "対象列スタイル = なし、対象行スタイル = なし、"
         + "検索列 = "
         + pszRoleColumns
         + pszQuantityColumnsDetail
@@ -2354,6 +2471,7 @@ def insert_cell_value_in_worksheet_xml(
     bNumeric: bool,
     iAreaStartRow: int,
     iAreaEndRow: int,
+    iCellXfsCount: int,
 ) -> bytes:
     """存在しないセルを対象行の列順へ、近傍セルのs属性付きで挿入します。"""
     objReferenceMatch: re.Match[str] | None = re.fullmatch(
@@ -2369,6 +2487,7 @@ def insert_cell_value_in_worksheet_xml(
         iTargetRow,
         iAreaStartRow,
         iAreaEndRow,
+        iCellXfsCount,
     )
     bytesRowNumber: bytes = re.escape(str(iTargetRow).encode("ascii"))
     objRowPattern: re.Pattern[bytes] = re.compile(
@@ -2471,6 +2590,7 @@ def update_step0004_cells_in_worksheet_xml(
     bytesWorksheet: bytes,
     tupleAreaRows: tuple[list[list[str]], ...],
     tupleAreaRanges: tuple[tuple[str, int, int, int, int], ...] = STEP0004_AREA_RANGES,
+    iCellXfsCount: int = 1,
 ) -> bytes:
     """3エリアの店舗コード・略称・月～日数量をセル値だけ更新します。"""
     for (
@@ -2493,6 +2613,7 @@ def update_step0004_cells_in_worksheet_xml(
                     bNumeric=iAreaColumn != 1 and bool(pszValue),
                     iAreaStartRow=iStartRow,
                     iAreaEndRow=iEndRow,
+                    iCellXfsCount=iCellXfsCount,
                 )
     return bytesWorksheet
 
@@ -2505,10 +2626,11 @@ def save_step0004_xlsx(
 ) -> str:
     """step0003の描画・書式を保ち、3エリアのセル値だけ更新します。"""
     with zipfile.ZipFile(objStep0003Path, mode="r") as objSourceArchive:
+        iCellXfsCount: int = get_cell_xfs_count(objSourceArchive)
         pszWorksheetPart: str = get_weekly_worksheet_part_name(objSourceArchive)
         bytesWorksheet: bytes = get_zip_member_bytes(objSourceArchive, pszWorksheetPart)
         bytesUpdatedWorksheet: bytes = update_step0004_cells_in_worksheet_xml(
-            bytesWorksheet, tupleAreaRows, tupleAreaRanges
+            bytesWorksheet, tupleAreaRows, tupleAreaRanges, iCellXfsCount
         )
         with zipfile.ZipFile(objStep0004Path, mode="w") as objOutputArchive:
             objOutputArchive.comment = objSourceArchive.comment
@@ -2531,6 +2653,7 @@ def validate_step0004_xlsx_parts(
 ) -> None:
     """対象セル値以外のXLSX内部データが変わっていないことを確認します。"""
     with zipfile.ZipFile(objStep0003Path, mode="r") as objSourceArchive:
+        iCellXfsCount: int = get_cell_xfs_count(objSourceArchive)
         with zipfile.ZipFile(objStep0004Path, mode="r") as objOutputArchive:
             listSourceNames: list[str] = [
                 objInfo.filename for objInfo in objSourceArchive.infolist()
@@ -2544,7 +2667,7 @@ def validate_step0004_xlsx_parts(
                 bytesSource: bytes = objSourceArchive.read(pszMemberName)
                 bytesExpected: bytes = (
                     update_step0004_cells_in_worksheet_xml(
-                        bytesSource, tupleAreaRows, tupleAreaRanges
+                        bytesSource, tupleAreaRows, tupleAreaRanges, iCellXfsCount
                     )
                     if pszMemberName == pszWorksheetPart
                     else bytesSource
