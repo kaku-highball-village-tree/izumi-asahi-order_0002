@@ -18,11 +18,15 @@ import win32api
 import win32con
 import win32gui
 
-
-WINDOW_TITLE: str = "Asahi Single Order Product Code Selector step0001-step0004 (Drag & Drop)"
+WINDOW_TITLE: str = (
+    "Asahi Single Order Product Code Selector step0001-step0004 (Drag & Drop)"
+)
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
 WEEKLY_TEMPLATE_FILE_NAME: str = "template_イズミ週間予定表_3列.xlsx"
+HIROSHIMA_WEEKLY_TEMPLATE_FILE_NAME: str = (
+    "template_イズミ週間予定表_2列_広島センター.xlsx"
+)
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 DISPLAY_FILE_LIMIT: int = 10
 
@@ -56,9 +60,7 @@ def get_next_result_history_path(objResultPath: Path, pszResult: str) -> Path:
         re.escape(pszBaseStem) + "_" + re.escape(pszResult) + r"_(\d{4,})\.txt$"
     )
     iMaximumSequence: int = 0
-    for objPath in objResultPath.parent.glob(
-        pszBaseStem + "_" + pszResult + "_*.txt"
-    ):
+    for objPath in objResultPath.parent.glob(pszBaseStem + "_" + pszResult + "_*.txt"):
         objMatch: re.Match[str] | None = objPattern.fullmatch(objPath.name)
         if objMatch is not None:
             iMaximumSequence = max(iMaximumSequence, int(objMatch.group(1)))
@@ -173,10 +175,7 @@ def run_product_code_selector_cmd(
     if not os.path.isfile(pszScriptFileFullPath):
         return (
             "failed",
-            "Error: "
-            + CMD_FILE_NAME
-            + " not found. Path = "
-            + pszScriptFileFullPath,
+            "Error: " + CMD_FILE_NAME + " not found. Path = " + pszScriptFileFullPath,
         )
     dictEnvironment: dict[str, str] = os.environ.copy()
     dictEnvironment["PYTHONIOENCODING"] = "utf-8"
@@ -247,7 +246,12 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "step0003のXLSXとA1:AB42のTSVを作成します。\n"
             "step0003の週間予定表とエリア別TSVを再読込し、\n"
             "広島・岡山・四国の店舗別データを各30店舗を上限に転記した\n"
-            "step0004のXLSXとTSVを作成します。\n\n"
+            "step0004のXLSXとTSVを作成します。\n"
+            "広島が31～60店舗の場合は、\n"
+            "template_イズミ週間予定表_2列_広島センター.xlsxから\n"
+            "広島センター用A1:S42と、3列版から岡山四国用A1:AB42の\n"
+            "step0003・step0004 XLSX／TSVを2組作成します。\n"
+            "広島が61店舗以上の場合は_error.txtを出力して終了します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
             "エラー時は_error.txtを出力します。"
@@ -263,9 +267,7 @@ def draw_instruction_text(iWindowHandle: int) -> None:
         win32gui.EndPaint(iWindowHandle, objPaintStruct)
 
 
-def window_proc(
-    iWindowHandle: int, iMessage: int, iWparam: int, iLparam: int
-) -> int:
+def window_proc(iWindowHandle: int, iMessage: int, iWparam: int, iLparam: int) -> int:
     """Windowsメッセージを処理します。"""
     if iMessage == win32con.WM_CREATE:
         win32gui.DragAcceptFiles(iWindowHandle, True)
@@ -306,7 +308,9 @@ def window_proc(
                         pszErrorMessage: str = (
                             "同じ結果ファイル名になる入力が複数指定されています。\n\n"
                             + "入力ファイル:\n"
-                            + "\n".join(os.path.abspath(pszPath) for pszPath in listGroupPaths)
+                            + "\n".join(
+                                os.path.abspath(pszPath) for pszPath in listGroupPaths
+                            )
                             + "\n\n同じフォルダー・同じファイル名本体の"
                             + "XLSXとTSVは同時処理できません。\n"
                             + "どちらか一方をドラッグ＆ドロップしてください。\n\n"
@@ -336,9 +340,7 @@ def window_proc(
                     + "\n\nドロップされた全入力の処理は開始していません。"
                     + "\n詳細は各入力と同じフォルダーの_error.txtを確認してください。"
                     + (
-                        "\n\n_error.txt保存失敗: "
-                        + str(len(listWriteFailures))
-                        + "件"
+                        "\n\n_error.txt保存失敗: " + str(len(listWriteFailures)) + "件"
                         if listWriteFailures
                         else ""
                     ),
@@ -354,9 +356,7 @@ def window_proc(
                     + " が見つかりません。プログラムと同じフォルダーに配置してください。",
                 )
                 return 0
-            pszProductsPath: str = os.path.join(
-                pszProgramDirectory, PRODUCTS_FILE_NAME
-            )
+            pszProductsPath: str = os.path.join(pszProgramDirectory, PRODUCTS_FILE_NAME)
             if not os.path.isfile(pszProductsPath):
                 report_dropped_files_error(
                     listDroppedFilePaths,
