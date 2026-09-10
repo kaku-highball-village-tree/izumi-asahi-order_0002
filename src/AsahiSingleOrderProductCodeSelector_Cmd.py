@@ -55,6 +55,9 @@ WEEKLY_TEMPLATE_FILE_NAME: str = "template_イズミ週間予定表_3列.xlsx"
 HIROSHIMA_WEEKLY_TEMPLATE_FILE_NAME: str = (
     "template_イズミ週間予定表_2列_広島センター.xlsx"
 )
+OKAYAMA_SHIKOKU_WEEKLY_TEMPLATE_FILE_NAME: str = (
+    "template_イズミ週間予定表_2列_岡山四国センター.xlsx"
+)
 WEEKLY_SHEET_NAME: str = "センター週間"
 WEEKLY_TSV_MAX_ROW: int = 42
 WEEKLY_TSV_MAX_COLUMN: int = 28
@@ -87,6 +90,10 @@ HIROSHIMA_DELIVERY_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((11, 4), (
 HIROSHIMA_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
     ("広島1～30", 12, 42, 2, 10),
     ("広島31～60", 12, 42, 11, 19),
+)
+OKAYAMA_SHIKOKU_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
+    ("岡山", 12, 42, 2, 10),
+    ("四国", 12, 42, 11, 19),
 )
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
@@ -497,6 +504,11 @@ def get_weekly_template_file_path() -> Path:
 def get_hiroshima_weekly_template_file_path() -> Path:
     """Cmdプログラムと同じフォルダーの広島センター週間予定表を返します。"""
     return Path(__file__).resolve().parent / HIROSHIMA_WEEKLY_TEMPLATE_FILE_NAME
+
+
+def get_okayama_shikoku_weekly_template_file_path() -> Path:
+    """Cmdプログラムと同じフォルダーの岡山四国センター週間予定表を返します。"""
+    return Path(__file__).resolve().parent / OKAYAMA_SHIKOKU_WEEKLY_TEMPLATE_FILE_NAME
 
 
 def create_abc_product_master(objSourcePath: Path, objOutputPath: Path) -> None:
@@ -3126,12 +3138,17 @@ def process_input_file(
         )
         objO3x, objO3t = create_step0003_outputs(
             objStep0002ExcelPath, objStep0002TsvPath,
-            get_weekly_template_file_path(), "_岡山四国",
+            get_okayama_shikoku_weekly_template_file_path(), "_岡山四国",
+            HIROSHIMA_TSV_MAX_COLUMN, HIROSHIMA_CREATION_DATE_CELL,
+            HIROSHIMA_DATE_ROW_RANGES, HIROSHIMA_DELIVERY_DATE_ROW_RANGES,
+            HIROSHIMA_SHIPMENT_WEEKDAY_ROW_RANGES,
+            HIROSHIMA_DELIVERY_WEEKDAY_ROW_RANGES,
         )
         objO4x, objO4t = create_step0004_outputs(
             objO3x, objO3t,
             (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
-            ([], listOkayamaRows, listShikokuRows),
+            (listOkayamaRows, listShikokuRows),
+            OKAYAMA_SHIKOKU_AREA_RANGES, HIROSHIMA_TSV_MAX_COLUMN,
         )
         listWeeklyOutputPaths.extend([
             ("広島センター", objH3x, objH3t, objH4x, objH4t),

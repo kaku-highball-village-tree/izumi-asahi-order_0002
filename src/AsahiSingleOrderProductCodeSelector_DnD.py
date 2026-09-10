@@ -27,6 +27,9 @@ WEEKLY_TEMPLATE_FILE_NAME: str = "template_イズミ週間予定表_3列.xlsx"
 HIROSHIMA_WEEKLY_TEMPLATE_FILE_NAME: str = (
     "template_イズミ週間予定表_2列_広島センター.xlsx"
 )
+OKAYAMA_SHIKOKU_WEEKLY_TEMPLATE_FILE_NAME: str = (
+    "template_イズミ週間予定表_2列_岡山四国センター.xlsx"
+)
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 DISPLAY_FILE_LIMIT: int = 10
 
@@ -249,7 +252,9 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "step0004のXLSXとTSVを作成します。\n"
             "広島が31～60店舗の場合は、\n"
             "template_イズミ週間予定表_2列_広島センター.xlsxから\n"
-            "広島センター用A1:S42と、3列版から岡山四国用A1:AB42の\n"
+            "広島センター用A1:S42を作成し、\n"
+            "template_イズミ週間予定表_2列_岡山四国センター.xlsxから\n"
+            "岡山四国用A1:S42の\n"
             "step0003・step0004 XLSX／TSVを2組作成します。\n"
             "広島が61店舗以上の場合は_error.txtを出力して終了します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
@@ -361,16 +366,6 @@ def window_proc(iWindowHandle: int, iMessage: int, iWparam: int, iLparam: int) -
                 report_dropped_files_error(
                     listDroppedFilePaths,
                     PRODUCTS_FILE_NAME
-                    + " が見つかりません。プログラムと同じフォルダーに配置してください。",
-                )
-                return 0
-            pszWeeklyTemplatePath: str = os.path.join(
-                pszProgramDirectory, WEEKLY_TEMPLATE_FILE_NAME
-            )
-            if not os.path.isfile(pszWeeklyTemplatePath):
-                report_dropped_files_error(
-                    listDroppedFilePaths,
-                    WEEKLY_TEMPLATE_FILE_NAME
                     + " が見つかりません。プログラムと同じフォルダーに配置してください。",
                 )
                 return 0
