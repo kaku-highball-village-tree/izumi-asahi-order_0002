@@ -66,6 +66,7 @@ FRESH_FISH_DOUBLE_TEMPLATE_FILE_NAME: str = (
 )
 FRESH_FISH_OUTPUT_SUFFIX: str = "_鮮魚_店別納入明細票"
 FRESH_FISH_SHEET_NAME: str = "センター週間"
+FRESH_FISH_TEMPLATE_SHEET_NAME: str = "店別納入明細票"
 FRESH_FISH_MAX_ROW: int = 53
 FRESH_FISH_MAX_COLUMN: int = 13
 FRESH_FISH_CLEAR_RANGES: tuple[str, ...] = ("B14:E53", "F14:I53", "J14:M53")
@@ -3049,10 +3050,18 @@ def create_step0005_outputs(
             dictTemporaryOutputs[objTsvPath] = objTsvTemp
             shutil.copy2(objTemplatePath, objExcelTemp)
             objWorkbook = load_workbook(objExcelTemp)
+            tupleTemplateSheetStates = tuple(
+                (objSheet.title, objSheet.sheet_state)
+                for objSheet in objWorkbook.worksheets
+            )
             try:
-                if len(objWorkbook.worksheets) != 1:
+                if FRESH_FISH_TEMPLATE_SHEET_NAME not in objWorkbook.sheetnames:
+                    pszSheetDetails: str = "\n".join(
+                        objWorksheet.title + " (" + objWorksheet.sheet_state + ")"
+                        for objWorksheet in objWorkbook.worksheets
+                    ) or "なし"
                     raise ValueError(
-                        "鮮魚店別納入明細票テンプレートのシート数が1ではありません。"
+                        "鮮魚店別納入明細票テンプレートに対象シートがありません。"
                         + "\n差し込み元テンプレート:\n"
                         + objTemplatePath.name
                         + "\n\n差し込み元テンプレートパス:\n"
@@ -3065,12 +3074,12 @@ def create_step0005_outputs(
                         + str(iStoreCount)
                         + "件\n\n広島注文数:\n"
                         + str(listCounts[iDay][1])
-                        + "件\n\n実際のシート数:\n"
-                        + str(len(objWorkbook.worksheets))
-                        + "\n\n実際のシート名:\n"
-                        + ("\n".join(objWorkbook.sheetnames) or "なし")
+                        + "件\n\n必要な対象シート:\n"
+                        + FRESH_FISH_TEMPLATE_SHEET_NAME
+                        + "\n\n認識したシート名と表示状態:\n"
+                        + pszSheetDetails
                     )
-                objWorksheet = objWorkbook.active
+                objWorksheet = objWorkbook[FRESH_FISH_TEMPLATE_SHEET_NAME]
                 for pszRange in FRESH_FISH_CLEAR_RANGES:
                     for tupleCells in objWorksheet[pszRange]:
                         for objCell in tupleCells:
@@ -3096,7 +3105,20 @@ def create_step0005_outputs(
                 objWorkbook.close()
             objSavedWorkbook = load_workbook(objExcelTemp, data_only=False)
             try:
-                objSavedWorksheet = objSavedWorkbook.active
+                if FRESH_FISH_TEMPLATE_SHEET_NAME not in objSavedWorkbook.sheetnames:
+                    raise ValueError(
+                        "保存後のstep0005 XLSXに対象シートがありません。シート = "
+                        + FRESH_FISH_TEMPLATE_SHEET_NAME
+                    )
+                tupleSavedSheetStates = tuple(
+                    (objSheet.title, objSheet.sheet_state)
+                    for objSheet in objSavedWorkbook.worksheets
+                )
+                if tupleSavedSheetStates != tupleTemplateSheetStates:
+                    raise ValueError(
+                        "step0005 XLSXのシート名・順番・表示状態が変更されました。"
+                    )
+                objSavedWorksheet = objSavedWorkbook[FRESH_FISH_TEMPLATE_SHEET_NAME]
                 for pszCell, objExpectedDate in (
                     ("J5", objShipmentDate),
                     ("J6", objDeliveryDate),
