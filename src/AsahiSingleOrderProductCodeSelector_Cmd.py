@@ -3017,8 +3017,20 @@ def create_step0005_outputs(
             objTemplatePath = get_fresh_fish_template_path(iStoreCount > 40)
             if not objTemplatePath.is_file():
                 raise ValueError(
-                    "鮮魚店別納入明細票テンプレートが見つかりません。Path = "
+                    "鮮魚店別納入明細票テンプレートが見つかりません。"
+                    + "\n差し込み元テンプレート:\n"
+                    + objTemplatePath.name
+                    + "\n\n差し込み元テンプレートパス:\n"
                     + str(objTemplatePath)
+                    + "\n\n対象納品日:\n"
+                    + objDeliveryDate.isoformat()
+                    + "\n\n対象納品曜日:\n"
+                    + WEEKDAYS[iDay]
+                    + "\n\n広島注文件数:\n"
+                    + str(iStoreCount)
+                    + "件\n\n広島注文数:\n"
+                    + str(listCounts[iDay][1])
+                    + "件"
                 )
             pszDateSuffix = (
                 "_" + objDeliveryDate.isoformat() + "(" + WEEKDAYS[iDay] + ")"
@@ -3041,6 +3053,22 @@ def create_step0005_outputs(
                 if len(objWorkbook.worksheets) != 1:
                     raise ValueError(
                         "鮮魚店別納入明細票テンプレートのシート数が1ではありません。"
+                        + "\n差し込み元テンプレート:\n"
+                        + objTemplatePath.name
+                        + "\n\n差し込み元テンプレートパス:\n"
+                        + str(objTemplatePath)
+                        + "\n\n対象納品日:\n"
+                        + objDeliveryDate.isoformat()
+                        + "\n\n対象納品曜日:\n"
+                        + WEEKDAYS[iDay]
+                        + "\n\n広島注文件数:\n"
+                        + str(iStoreCount)
+                        + "件\n\n広島注文数:\n"
+                        + str(listCounts[iDay][1])
+                        + "件\n\n実際のシート数:\n"
+                        + str(len(objWorkbook.worksheets))
+                        + "\n\n実際のシート名:\n"
+                        + ("\n".join(objWorkbook.sheetnames) or "なし")
                     )
                 objWorksheet = objWorkbook.active
                 for pszRange in FRESH_FISH_CLEAR_RANGES:

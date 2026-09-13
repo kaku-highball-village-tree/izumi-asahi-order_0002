@@ -267,7 +267,9 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "step0005 XLSX・A1:M53 TSVを月～日の7組作成します。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
-            "エラー時は_error.txtを出力します。"
+            "エラー時は_error.txtを出力します。\n"
+            "step0005のテンプレートエラー時は差し込み元ファイル名を\n"
+            "_error.txtに記録します。"
         )
         win32gui.DrawText(
             iDeviceContext,
