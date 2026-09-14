@@ -19,7 +19,7 @@ import win32con
 import win32gui
 
 WINDOW_TITLE: str = (
-    "Asahi Single Order Product Code Selector step0001-step0004 (Drag & Drop)"
+    "Asahi Single Order Product Code Selector step0001-step0005 (Drag & Drop)"
 )
 CMD_FILE_NAME: str = "AsahiSingleOrderProductCodeSelector_Cmd.py"
 PRODUCTS_FILE_NAME: str = "products_all_109_readable.tsv"
@@ -29,6 +29,10 @@ HIROSHIMA_WEEKLY_TEMPLATE_FILE_NAME: str = (
 )
 OKAYAMA_SHIKOKU_WEEKLY_TEMPLATE_FILE_NAME: str = (
     "template_イズミ週間予定表_2列_岡山四国センター.xlsx"
+)
+FRESH_FISH_TEMPLATE_FILE_NAMES: tuple[str, str] = (
+    "template_鮮魚_店別納入明細票_広島1列_岡山1列_四国1列.xlsx",
+    "template_鮮魚_店別納入明細票_広島2列_岡山四国1列.xlsx",
 )
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 DISPLAY_FILE_LIMIT: int = 10
@@ -78,7 +82,7 @@ def write_input_error_text(pszInputFilePath: str, pszErrorMessage: str) -> None:
     objSuccessPath: Path = objBasePath.with_name(objBasePath.name + "_success.txt")
     objErrorPath: Path = objBasePath.with_name(objBasePath.name + "_error.txt")
     pszText: str = (
-        "処理名:\nProductCodeSelector step0001～step0004\n\n"
+        "処理名:\nProductCodeSelector step0001～step0005\n\n"
         + "エラー:\n"
         + pszErrorMessage
         + "\n"
@@ -257,9 +261,20 @@ def draw_instruction_text(iWindowHandle: int) -> None:
             "岡山四国用A1:S42の\n"
             "step0003・step0004 XLSX／TSVを2組作成します。\n"
             "広島が61店舗以上の場合は_error.txtを出力して終了します。\n\n"
+            "通常版または分割版step0004 TSVの全日付と負数を検証し、\n"
+            "広島の曜日別注文件数に応じた鮮魚店別納入明細票から、\n"
+            "広島が30店舗以下の通常版では常に1列版を使用して、\n"
+            "J5へ出荷日、J6へ納品日を設定し、明細範囲を初期化後、\n"
+            "曜日別の注文あり店舗について店番・店舗名・納品数量を転記し、\n"
+            "目方重量を空欄にした\n"
+            "step0005 XLSX・A1:M53 TSVを月～日の7組作成します。\n\n"
+            "step0005は「店別納入明細票」シートだけを処理し、\n"
+            "テンプレート内のその他のシートは変更しません。\n\n"
             "出力ファイルは入力ファイルと同じフォルダーに作成します。\n"
             "既存の出力ファイルは自動的に上書きします。\n"
-            "エラー時は_error.txtを出力します。"
+            "エラー時は_error.txtを出力します。\n"
+            "step0005のテンプレートエラー時は差し込み元ファイル名を\n"
+            "_error.txtに記録します。"
         )
         win32gui.DrawText(
             iDeviceContext,
@@ -452,13 +467,14 @@ def window_proc(iWindowHandle: int, iMessage: int, iWparam: int, iLparam: int) -
                 show_message_box(pszMessage, WINDOW_TITLE)
             else:
                 pszMessage += (
-                    "\n\nProductCodeSelector step0001～step0004を作成しました。"
+                    "\n\nProductCodeSelector step0001～step0005を作成しました。"
                     + "\n\n作成内容:"
                     + "\n・step0001 XLSX・TSV"
                     + "\n・step0002 XLSX・TSV"
                     + "\n・step0003 週間予定表XLSX・TSV"
                     + "\n・step0003 店舗別TSV 4ファイル"
                     + "\n・step0004 店舗別週間予定表XLSX・TSV"
+                    + "\n・step0005 鮮魚店別納入明細票XLSX・TSV（月～日）"
                     + "\n\n詳細は各入力と同じフォルダーの"
                     + "_success.txtを確認してください。"
                 )
