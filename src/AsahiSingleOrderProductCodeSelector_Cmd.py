@@ -58,6 +58,20 @@ HIROSHIMA_WEEKLY_TEMPLATE_FILE_NAME: str = (
 OKAYAMA_SHIKOKU_WEEKLY_TEMPLATE_FILE_NAME: str = (
     "template_イズミ週間予定表_2列_岡山四国センター.xlsx"
 )
+FRESH_FISH_SINGLE_TEMPLATE_FILE_NAME: str = (
+    "template_鮮魚_店別納入明細票_広島1列_岡山1列_四国1列.xlsx"
+)
+FRESH_FISH_DOUBLE_TEMPLATE_FILE_NAME: str = (
+    "template_鮮魚_店別納入明細票_広島2列_岡山四国1列.xlsx"
+)
+FRESH_FISH_OUTPUT_SUFFIX: str = "_鮮魚_店別納入明細票"
+FRESH_FISH_SHEET_NAME: str = "センター週間"
+FRESH_FISH_TEMPLATE_SHEET_NAME: str = "店別納入明細票"
+FRESH_FISH_MAX_ROW: int = 53
+FRESH_FISH_MAX_COLUMN: int = 13
+FRESH_FISH_CLEAR_RANGES: tuple[str, ...] = ("B14:E53", "F14:I53", "J14:M53")
+FRESH_FISH_DETAIL_START_ROW: int = 14
+FRESH_FISH_DETAIL_CAPACITY: int = 40
 WEEKLY_SHEET_NAME: str = "センター週間"
 WEEKLY_TSV_MAX_ROW: int = 42
 WEEKLY_TSV_MAX_COLUMN: int = 28
@@ -1465,8 +1479,10 @@ def get_zip_member_bytes(objArchive: zipfile.ZipFile, pszMemberName: str) -> byt
     return objArchive.read(pszMemberName)
 
 
-def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
-    """workbookとrelationshipからセンター週間のXMLパスを解決します。"""
+def get_named_worksheet_part_name(
+    objArchive: zipfile.ZipFile, pszSheetName: str
+) -> str:
+    """workbookとrelationshipから指定シートのXMLパスを解決します。"""
     pszWorkbookPart: str = "xl/workbook.xml"
     bytesWorkbook: bytes = get_zip_member_bytes(objArchive, pszWorkbookPart)
     objWorkbookRoot: ET.Element = ET.fromstring(bytesWorkbook)
@@ -1474,10 +1490,12 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         objElement
         for objElement in objWorkbookRoot.iter()
         if get_xml_local_name(objElement.tag) == "sheet"
-        and objElement.attrib.get("name") == WEEKLY_SHEET_NAME
+        and objElement.attrib.get("name") == pszSheetName
     ]
     if len(listMatchedSheets) != 1:
-        raise ValueError("XLSX内の「センター週間」シートを1つに特定できません。")
+        raise ValueError(
+            "XLSX内の「" + pszSheetName + "」シートを1つに特定できません。"
+        )
     pszRelationshipId: str = next(
         (
             pszValue
@@ -1487,7 +1505,7 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         "",
     )
     if not pszRelationshipId:
-        raise ValueError("「センター週間」シートのrelationship IDがありません。")
+        raise ValueError("「" + pszSheetName + "」シートのrelationship IDがありません。")
 
     pszRelationshipsPart: str = "xl/_rels/workbook.xml.rels"
     bytesRelationships: bytes = get_zip_member_bytes(objArchive, pszRelationshipsPart)
@@ -1499,13 +1517,15 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         and objElement.attrib.get("Id") == pszRelationshipId
     ]
     if len(listMatchedRelationships) != 1:
-        raise ValueError("「センター週間」シートのrelationshipを1つに特定できません。")
+        raise ValueError(
+            "「" + pszSheetName + "」シートのrelationshipを1つに特定できません。"
+        )
     objRelationship: ET.Element = listMatchedRelationships[0]
     if objRelationship.attrib.get("TargetMode", "Internal") != "Internal":
-        raise ValueError("「センター週間」シートがXLSX内部にありません。")
+        raise ValueError("「" + pszSheetName + "」シートがXLSX内部にありません。")
     pszTarget: str = objRelationship.attrib.get("Target", "").replace("\\", "/")
     if not pszTarget:
-        raise ValueError("「センター週間」シートのXMLパスがありません。")
+        raise ValueError("「" + pszSheetName + "」シートのXMLパスがありません。")
     if pszTarget.startswith("/"):
         pszWorksheetPart: str = posixpath.normpath(pszTarget.lstrip("/"))
     else:
@@ -1517,9 +1537,17 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         or pszWorksheetPart not in objArchive.namelist()
     ):
         raise ValueError(
-            "「センター週間」シートのXMLが見つかりません。Path = " + pszWorksheetPart
+            "「"
+            + pszSheetName
+            + "」シートのXMLが見つかりません。Path = "
+            + pszWorksheetPart
         )
     return pszWorksheetPart
+
+
+def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
+    """workbookとrelationshipからセンター週間のXMLパスを解決します。"""
+    return get_named_worksheet_part_name(objArchive, WEEKLY_SHEET_NAME)
 
 
 def get_cell_xml_span(
@@ -2766,6 +2794,883 @@ def create_step0004_outputs(
     return objStep0004ExcelPath, objStep0004TsvPath
 
 
+def get_fresh_fish_template_path(bDoubleHiroshima: bool) -> Path:
+    """曜日別の広島注文件数に対応する鮮魚明細票テンプレートを返します。"""
+    pszFileName: str = (
+        FRESH_FISH_DOUBLE_TEMPLATE_FILE_NAME
+        if bDoubleHiroshima
+        else FRESH_FISH_SINGLE_TEMPLATE_FILE_NAME
+    )
+    return Path(__file__).resolve().parent / pszFileName
+
+
+def parse_step0005_date(pszValue: str, pszSource: str) -> date:
+    """step0004 TSVの日付をISO日付として検証して返します。"""
+    try:
+        return date.fromisoformat(pszValue.strip())
+    except ValueError as objException:
+        raise ValueError(
+            pszSource + "の日付が不正です。値 = " + repr(pszValue)
+        ) from objException
+
+
+def validate_step0005_input_dates(
+    listHiroshimaRows: list[list[str]], listOkayamaRows: list[list[str]]
+) -> tuple[list[date], list[date]]:
+    """2つのstep0004 TSVの日付・曜日・左右ブロックの一致を検証します。"""
+    for pszName, listRows in (
+        ("広島センター", listHiroshimaRows),
+        ("岡山四国", listOkayamaRows),
+    ):
+        validate_weekly_tsv_size(
+            listRows, "step0004 " + pszName, HIROSHIMA_TSV_MAX_COLUMN
+        )
+    tupleWeekdayRows: tuple[tuple[int, int, tuple[str, ...]], ...] = (
+        (9, 4, ("日", "月", "火", "水", "木", "金", "土")),
+        (11, 4, WEEKDAYS),
+        (9, 13, ("日", "月", "火", "水", "木", "金", "土")),
+        (11, 13, WEEKDAYS),
+    )
+    dictDates: dict[str, tuple[list[date], list[date], list[date], list[date]]] = {}
+    for pszName, listRows in (
+        ("広島センター", listHiroshimaRows),
+        ("岡山四国", listOkayamaRows),
+    ):
+        for iRow, iStartColumn, tupleExpected in tupleWeekdayRows:
+            tupleActual = tuple(
+                listRows[iRow - 1][iStartColumn - 1 + iOffset].strip()
+                for iOffset in range(7)
+            )
+            if tupleActual != tupleExpected:
+                raise ValueError(
+                    "step0004 " + pszName + " TSVの曜日が仕様どおりではありません。"
+                )
+        listDateGroups: list[list[date]] = []
+        for iRow, iStartColumn in ((8, 4), (10, 4), (8, 13), (10, 13)):
+            listDates = [
+                parse_step0005_date(
+                    listRows[iRow - 1][iStartColumn - 1 + iOffset],
+                    "step0004 "
+                    + pszName
+                    + " TSV "
+                    + get_column_letter(iStartColumn + iOffset)
+                    + str(iRow),
+                )
+                for iOffset in range(7)
+            ]
+            if any(
+                listDates[i] + timedelta(days=1) != listDates[i + 1] for i in range(6)
+            ):
+                raise ValueError(
+                    "step0004 " + pszName + " TSVの日付が7日間連続していません。"
+                )
+            listDateGroups.append(listDates)
+        listShip1, listDelivery1, listShip2, listDelivery2 = listDateGroups
+        if listShip1 != listShip2 or listDelivery1 != listDelivery2:
+            raise ValueError(
+                "step0004 " + pszName + " TSVの左右ブロックの日付が一致しません。"
+            )
+        if any(
+            objDelivery != objShip + timedelta(days=1)
+            for objShip, objDelivery in zip(listShip1, listDelivery1)
+        ):
+            raise ValueError(
+                "step0004 " + pszName + " TSVの納品日が出荷日の翌日ではありません。"
+            )
+        if any(
+            objDate.weekday() != iOffset
+            for iOffset, objDate in enumerate(listDelivery1)
+        ):
+            raise ValueError(
+                "step0004 " + pszName + " TSVの納品日と曜日が一致しません。"
+            )
+        dictDates[pszName] = (listShip1, listDelivery1, listShip2, listDelivery2)
+    if dictDates["広島センター"] != dictDates["岡山四国"]:
+        raise ValueError("広島センターTSVと岡山四国TSVの日付が一致しません。")
+    return dictDates["広島センター"][:2]
+
+
+def validate_standard_step0005_input_dates(
+    listRows: list[list[str]],
+) -> tuple[list[date], list[date]]:
+    """通常3エリア版step0004 TSVの日付・曜日・3ブロックを検証します。"""
+    validate_weekly_tsv_size(listRows, "step0004", WEEKLY_TSV_MAX_COLUMN)
+    tupleShipmentWeekdays: tuple[str, ...] = ("日", "月", "火", "水", "木", "金", "土")
+    listShipmentGroups: list[list[date]] = []
+    listDeliveryGroups: list[list[date]] = []
+    for iStartColumn in (4, 13, 22):
+        tupleActualShipmentWeekdays = tuple(
+            listRows[8][iStartColumn - 1 + iOffset].strip() for iOffset in range(7)
+        )
+        tupleActualDeliveryWeekdays = tuple(
+            listRows[10][iStartColumn - 1 + iOffset].strip() for iOffset in range(7)
+        )
+        if tupleActualShipmentWeekdays != tupleShipmentWeekdays:
+            raise ValueError("通常版step0004 TSVの出荷曜日が仕様どおりではありません。")
+        if tupleActualDeliveryWeekdays != WEEKDAYS:
+            raise ValueError("通常版step0004 TSVの納品曜日が仕様どおりではありません。")
+        listShipmentDates = [
+            parse_step0005_date(
+                listRows[7][iStartColumn - 1 + iOffset],
+                "通常版step0004 TSV "
+                + get_column_letter(iStartColumn + iOffset)
+                + "8",
+            )
+            for iOffset in range(7)
+        ]
+        listDeliveryDates = [
+            parse_step0005_date(
+                listRows[9][iStartColumn - 1 + iOffset],
+                "通常版step0004 TSV "
+                + get_column_letter(iStartColumn + iOffset)
+                + "10",
+            )
+            for iOffset in range(7)
+        ]
+        if any(
+            listShipmentDates[iOffset] + timedelta(days=1)
+            != listShipmentDates[iOffset + 1]
+            for iOffset in range(6)
+        ) or any(
+            listDeliveryDates[iOffset] + timedelta(days=1)
+            != listDeliveryDates[iOffset + 1]
+            for iOffset in range(6)
+        ):
+            raise ValueError("通常版step0004 TSVの日付が7日間連続していません。")
+        if any(
+            objDeliveryDate != objShipmentDate + timedelta(days=1)
+            for objShipmentDate, objDeliveryDate in zip(
+                listShipmentDates, listDeliveryDates
+            )
+        ):
+            raise ValueError("通常版step0004 TSVの納品日が出荷日の翌日ではありません。")
+        if any(
+            objDeliveryDate.weekday() != iOffset
+            for iOffset, objDeliveryDate in enumerate(listDeliveryDates)
+        ):
+            raise ValueError("通常版step0004 TSVの納品日と曜日が一致しません。")
+        listShipmentGroups.append(listShipmentDates)
+        listDeliveryGroups.append(listDeliveryDates)
+    if any(listDates != listShipmentGroups[0] for listDates in listShipmentGroups[1:]) or any(
+        listDates != listDeliveryGroups[0] for listDates in listDeliveryGroups[1:]
+    ):
+        raise ValueError("通常版step0004 TSVの3エリアの日付が一致しません。")
+    return listShipmentGroups[0], listDeliveryGroups[0]
+
+
+def validate_standard_step0005_quantities(
+    objInputPath: Path, listRows: list[list[str]]
+) -> None:
+    """通常3エリア版の全数量を検証し、負数のファイル・セルを列挙します。"""
+    listNegativeDetails: list[str] = []
+    for pszArea, iStoreColumn, iQuantityStartColumn in (
+        ("広島", 2, 4),
+        ("岡山", 11, 13),
+        ("四国", 20, 22),
+    ):
+        for iRow in range(12, 43):
+            pszStoreCode = listRows[iRow - 1][iStoreColumn - 1].strip()
+            pszStoreName = listRows[iRow - 1][iStoreColumn].strip()
+            for iOffset, pszWeekday in enumerate(WEEKDAYS):
+                iColumn = iQuantityStartColumn + iOffset
+                pszQuantity = listRows[iRow - 1][iColumn - 1].strip()
+                if not pszQuantity:
+                    continue
+                if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
+                    raise ValueError(
+                        "通常版step0004 TSVの注文数量が整数ではありません。ファイル = "
+                        + str(objInputPath)
+                        + "、シート = "
+                        + FRESH_FISH_SHEET_NAME
+                        + "、セル = "
+                        + get_column_letter(iColumn)
+                        + str(iRow)
+                    )
+                if int(pszQuantity) < 0:
+                    listNegativeDetails.append(
+                        "ファイル = "
+                        + str(objInputPath)
+                        + "、シート = "
+                        + FRESH_FISH_SHEET_NAME
+                        + "、セル = "
+                        + get_column_letter(iColumn)
+                        + str(iRow)
+                        + "、エリア = "
+                        + pszArea
+                        + "、店舗コード = "
+                        + pszStoreCode
+                        + "、店舗略称 = "
+                        + pszStoreName
+                        + "、納品曜日 = "
+                        + pszWeekday
+                        + "、値 = "
+                        + pszQuantity
+                    )
+    if listNegativeDetails:
+        raise ValueError(
+            "注文数量に負数があります。負数件数 = "
+            + str(len(listNegativeDetails))
+            + "\n"
+            + "\n".join(listNegativeDetails)
+        )
+
+
+def validate_step0005_quantities(
+    objHiroshimaPath: Path,
+    listHiroshimaRows: list[list[str]],
+    objOkayamaPath: Path,
+    listOkayamaRows: list[list[str]],
+) -> None:
+    """全店舗の数量を検証し、負数があればファイル・シート・セルを列挙します。"""
+    listNegativeDetails: list[str] = []
+    for objPath, listRows, tupleAreas in (
+        (objHiroshimaPath, listHiroshimaRows, (("広島", 2, 4), ("広島", 11, 13))),
+        (objOkayamaPath, listOkayamaRows, (("岡山", 2, 4), ("四国", 11, 13))),
+    ):
+        for pszArea, iStoreColumn, iQuantityStartColumn in tupleAreas:
+            for iRow in range(12, 43):
+                pszStoreCode = listRows[iRow - 1][iStoreColumn - 1].strip()
+                pszStoreName = listRows[iRow - 1][iStoreColumn].strip()
+                for iOffset, pszWeekday in enumerate(WEEKDAYS):
+                    iColumn = iQuantityStartColumn + iOffset
+                    pszQuantity = listRows[iRow - 1][iColumn - 1].strip()
+                    if not pszQuantity:
+                        continue
+                    if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
+                        raise ValueError(
+                            "step0004 TSVの注文数量が整数ではありません。ファイル = "
+                            + str(objPath)
+                            + "、シート = "
+                            + FRESH_FISH_SHEET_NAME
+                            + "、セル = "
+                            + get_column_letter(iColumn)
+                            + str(iRow)
+                        )
+                    if int(pszQuantity) < 0:
+                        listNegativeDetails.append(
+                            "ファイル = "
+                            + str(objPath)
+                            + "、シート = "
+                            + FRESH_FISH_SHEET_NAME
+                            + "、セル = "
+                            + get_column_letter(iColumn)
+                            + str(iRow)
+                            + "、エリア = "
+                            + pszArea
+                            + "、店舗コード = "
+                            + pszStoreCode
+                            + "、店舗略称 = "
+                            + pszStoreName
+                            + "、納品曜日 = "
+                            + pszWeekday
+                            + "、値 = "
+                            + pszQuantity
+                        )
+    if listNegativeDetails:
+        raise ValueError(
+            "注文数量に負数があります。負数件数 = "
+            + str(len(listNegativeDetails))
+            + "\n"
+            + "\n".join(listNegativeDetails)
+        )
+
+
+def get_step0005_order_counts(
+    listHiroshimaRows: list[list[str]],
+) -> list[tuple[int, int]]:
+    """月～日の広島の（注文件数、注文数）を返します。"""
+    listCounts: list[tuple[int, int]] = []
+    for iOffset in range(7):
+        listQuantities: list[int] = []
+        for iStoreColumn, iQuantityStartColumn in ((2, 4), (11, 13)):
+            for iRow in range(12, 43):
+                if not listHiroshimaRows[iRow - 1][iStoreColumn - 1].strip():
+                    continue
+                pszQuantity = listHiroshimaRows[iRow - 1][
+                    iQuantityStartColumn - 1 + iOffset
+                ].strip()
+                listQuantities.append(int(pszQuantity) if pszQuantity else 0)
+        listCounts.append(
+            (sum(iQuantity > 0 for iQuantity in listQuantities), sum(listQuantities))
+        )
+    return listCounts
+
+
+def get_standard_step0005_order_counts(
+    listRows: list[list[str]],
+) -> list[tuple[int, int]]:
+    """通常3エリア版から月～日の広島の（注文件数、注文数）を返します。"""
+    iHiroshimaStoreCount: int = sum(
+        bool(listRows[iRow - 1][1].strip()) for iRow in range(12, 43)
+    )
+    if iHiroshimaStoreCount > STEP0004_MAX_STORES_PER_AREA:
+        raise ValueError(
+            "通常版step0004 TSVの広島店舗数が30店舗を超えています。店舗数 = "
+            + str(iHiroshimaStoreCount)
+        )
+    listCounts: list[tuple[int, int]] = []
+    for iOffset in range(7):
+        listQuantities: list[int] = []
+        for iRow in range(12, 43):
+            if not listRows[iRow - 1][1].strip():
+                continue
+            pszQuantity = listRows[iRow - 1][3 + iOffset].strip()
+            listQuantities.append(int(pszQuantity) if pszQuantity else 0)
+        listCounts.append(
+            (sum(iQuantity > 0 for iQuantity in listQuantities), sum(listQuantities))
+        )
+    return listCounts
+
+
+def format_japanese_date(objDate: date) -> str:
+    """帳票TSV用の和文日付を返します。"""
+    return f"{objDate.year}年{objDate.month}月{objDate.day}日({WEEKDAYS[objDate.weekday()]})"
+
+
+def read_step0005_area_orders(
+    objInputPath: Path, pszArea: str
+) -> list[list[tuple[str, str, int]]]:
+    """地域別step0003 TSVを検証し、月～日の注文あり店舗を返します。"""
+    listRows, _ = read_tsv_table(objInputPath)
+    listOrdersByDay: list[list[tuple[str, str, int]]] = [[] for _ in WEEKDAYS]
+    setStoreCodes: set[str] = set()
+    listNegativeDetails: list[str] = []
+    for iRow, listRow in enumerate(listRows, start=1):
+        if len(listRow) != 9:
+            raise ValueError(
+                "step0003地域別TSVが9列ではありません。ファイル = "
+                + str(objInputPath)
+                + "、行 = "
+                + str(iRow)
+                + "、実際の列数 = "
+                + str(len(listRow))
+            )
+        pszStoreCode = listRow[0].strip()
+        pszStoreName = listRow[1].strip()
+        if re.fullmatch(r"\d+", pszStoreCode) is None:
+            raise ValueError(
+                "step0003地域別TSVの店舗コードが不正です。ファイル = "
+                + str(objInputPath)
+                + "、セル = A"
+                + str(iRow)
+            )
+        if not pszStoreName:
+            raise ValueError(
+                "step0003地域別TSVの店舗略称が空欄です。ファイル = "
+                + str(objInputPath)
+                + "、セル = B"
+                + str(iRow)
+            )
+        pszStoreCode = str(int(pszStoreCode))
+        if pszStoreCode in setStoreCodes:
+            raise ValueError(
+                "step0003地域別TSVの店舗コードが重複しています。ファイル = "
+                + str(objInputPath)
+                + "、店舗コード = "
+                + pszStoreCode
+            )
+        setStoreCodes.add(pszStoreCode)
+        for iDay, pszWeekday in enumerate(WEEKDAYS):
+            pszQuantity = listRow[iDay + 2].strip()
+            if not pszQuantity:
+                continue
+            if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
+                raise ValueError(
+                    "step0003地域別TSVの注文数量が整数ではありません。ファイル = "
+                    + str(objInputPath)
+                    + "、セル = "
+                    + get_column_letter(iDay + 3)
+                    + str(iRow)
+                )
+            iQuantity = int(pszQuantity)
+            if iQuantity < 0:
+                listNegativeDetails.append(
+                    "ファイル = "
+                    + str(objInputPath)
+                    + "、シート = "
+                    + pszArea
+                    + "、セル = "
+                    + get_column_letter(iDay + 3)
+                    + str(iRow)
+                    + "、店舗コード = "
+                    + pszStoreCode
+                    + "、店舗略称 = "
+                    + pszStoreName
+                    + "、納品曜日 = "
+                    + pszWeekday
+                    + "、値 = "
+                    + pszQuantity
+                )
+            elif iQuantity > 0:
+                listOrdersByDay[iDay].append(
+                    (pszStoreCode, pszStoreName, iQuantity)
+                )
+    if listNegativeDetails:
+        raise ValueError(
+            "注文数量に負数があります。負数件数 = "
+            + str(len(listNegativeDetails))
+            + "\n"
+            + "\n".join(listNegativeDetails)
+        )
+    return listOrdersByDay
+
+
+def build_step0005_detail_cells(
+    listHiroshimaOrders: list[tuple[str, str, int]],
+    listOkayamaOrders: list[tuple[str, str, int]],
+    listShikokuOrders: list[tuple[str, str, int]],
+    bDoubleHiroshima: bool,
+) -> dict[tuple[int, int], str | int]:
+    """選択テンプレートの地域配置に従う明細セル値を返します。"""
+    dictCells: dict[tuple[int, int], str | int] = {}
+
+    def add_orders(
+        listOrders: list[tuple[str, str, int]], iStartColumn: int, iStartRow: int
+    ) -> None:
+        for iOffset, (pszCode, pszName, iQuantity) in enumerate(listOrders):
+            iRow = iStartRow + iOffset
+            dictCells[(iRow, iStartColumn)] = pszCode
+            dictCells[(iRow, iStartColumn + 1)] = pszName
+            dictCells[(iRow, iStartColumn + 2)] = iQuantity
+
+    if len(listHiroshimaOrders) > (80 if bDoubleHiroshima else 40):
+        raise ValueError(
+            "広島注文件数が鮮魚店別納入明細票の容量を超えています。注文件数 = "
+            + str(len(listHiroshimaOrders))
+        )
+    if bDoubleHiroshima:
+        iCombinedCount = len(listOkayamaOrders) + len(listShikokuOrders)
+        if iCombinedCount >= 40:
+            raise ValueError(
+                "岡山・四国の合計注文件数が39件を超えています。合計注文件数 = "
+                + str(iCombinedCount)
+            )
+        add_orders(listHiroshimaOrders[:40], 2, FRESH_FISH_DETAIL_START_ROW)
+        add_orders(listHiroshimaOrders[40:], 6, FRESH_FISH_DETAIL_START_ROW)
+        add_orders(listOkayamaOrders, 10, FRESH_FISH_DETAIL_START_ROW)
+        iGap = 0
+        if listOkayamaOrders and listShikokuOrders:
+            iGap = min(3, FRESH_FISH_DETAIL_CAPACITY - iCombinedCount)
+        add_orders(
+            listShikokuOrders,
+            10,
+            FRESH_FISH_DETAIL_START_ROW + len(listOkayamaOrders) + iGap,
+        )
+    else:
+        for pszArea, listOrders in (
+            ("岡山", listOkayamaOrders),
+            ("四国", listShikokuOrders),
+        ):
+            if len(listOrders) > FRESH_FISH_DETAIL_CAPACITY:
+                raise ValueError(
+                    pszArea
+                    + "注文件数が鮮魚店別納入明細票の容量を超えています。注文件数 = "
+                    + str(len(listOrders))
+                )
+        add_orders(listHiroshimaOrders, 2, FRESH_FISH_DETAIL_START_ROW)
+        add_orders(listOkayamaOrders, 6, FRESH_FISH_DETAIL_START_ROW)
+        add_orders(listShikokuOrders, 10, FRESH_FISH_DETAIL_START_ROW)
+    return dictCells
+
+
+def update_step0005_cells_in_worksheet_xml(
+    bytesWorksheet: bytes,
+    objShipmentDate: date,
+    objDeliveryDate: date,
+    objExcelEpoch: date,
+    dictDetailCells: dict[tuple[int, int], str | int],
+    iCellXfsCount: int,
+) -> bytes:
+    """鮮魚明細票の指定セル値だけを更新し、描画参照などは保持します。"""
+    for pszCellReference, objTargetDate in (
+        ("J5", objShipmentDate),
+        ("J6", objDeliveryDate),
+    ):
+        bytesWorksheet = update_excel_date_in_worksheet_xml(
+            bytesWorksheet,
+            pszCellReference,
+            (objTargetDate - objExcelEpoch).days,
+        )
+    for iRow in range(FRESH_FISH_DETAIL_START_ROW, FRESH_FISH_MAX_ROW + 1):
+        for iColumn in range(2, FRESH_FISH_MAX_COLUMN + 1):
+            objValue = dictDetailCells.get((iRow, iColumn), "")
+            pszValue = str(objValue) if objValue != "" else ""
+            bytesWorksheet = set_cell_value_in_worksheet_xml(
+                bytesWorksheet,
+                get_column_letter(iColumn) + str(iRow),
+                pszValue,
+                bNumeric=bool(pszValue) and iColumn in (4, 8, 12),
+                iAreaStartRow=FRESH_FISH_DETAIL_START_ROW,
+                iAreaEndRow=FRESH_FISH_MAX_ROW,
+                iCellXfsCount=iCellXfsCount,
+            )
+    return bytesWorksheet
+
+
+def save_step0005_xlsx(
+    objTemplatePath: Path,
+    objOutputPath: Path,
+    objShipmentDate: date,
+    objDeliveryDate: date,
+    dictDetailCells: dict[tuple[int, int], str | int],
+) -> str:
+    """テンプレートの描画を保ち、鮮魚明細票のセル値だけを更新します。"""
+    with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
+        pszWorksheetPart = get_named_worksheet_part_name(
+            objSourceArchive, FRESH_FISH_TEMPLATE_SHEET_NAME
+        )
+        bytesWorksheet = get_zip_member_bytes(objSourceArchive, pszWorksheetPart)
+        bytesUpdatedWorksheet = update_step0005_cells_in_worksheet_xml(
+            bytesWorksheet,
+            objShipmentDate,
+            objDeliveryDate,
+            get_excel_date_epoch(objSourceArchive),
+            dictDetailCells,
+            get_cell_xfs_count(objSourceArchive),
+        )
+        with zipfile.ZipFile(objOutputPath, mode="w") as objOutputArchive:
+            objOutputArchive.comment = objSourceArchive.comment
+            for objInfo in objSourceArchive.infolist():
+                bytesContent = (
+                    bytesUpdatedWorksheet
+                    if objInfo.filename == pszWorksheetPart
+                    else objSourceArchive.read(objInfo.filename)
+                )
+                objOutputArchive.writestr(objInfo, bytesContent)
+    return pszWorksheetPart
+
+
+def validate_step0005_xlsx_parts(
+    objTemplatePath: Path,
+    objOutputPath: Path,
+    pszWorksheetPart: str,
+    objShipmentDate: date,
+    objDeliveryDate: date,
+    dictDetailCells: dict[tuple[int, int], str | int],
+) -> None:
+    """対象worksheet以外の全パーツと描画が不変であることを検証します。"""
+    with zipfile.ZipFile(objTemplatePath, mode="r") as objTemplateArchive:
+        with zipfile.ZipFile(objOutputPath, mode="r") as objOutputArchive:
+            listTemplateNames = [
+                objInfo.filename for objInfo in objTemplateArchive.infolist()
+            ]
+            listOutputNames = [
+                objInfo.filename for objInfo in objOutputArchive.infolist()
+            ]
+            if listTemplateNames != listOutputNames:
+                raise ValueError("step0005 XLSXの内部パーツ構成が変更されました。")
+            bytesExpectedWorksheet = update_step0005_cells_in_worksheet_xml(
+                get_zip_member_bytes(objTemplateArchive, pszWorksheetPart),
+                objShipmentDate,
+                objDeliveryDate,
+                get_excel_date_epoch(objTemplateArchive),
+                dictDetailCells,
+                get_cell_xfs_count(objTemplateArchive),
+            )
+            for pszMemberName in listTemplateNames:
+                bytesExpected = (
+                    bytesExpectedWorksheet
+                    if pszMemberName == pszWorksheetPart
+                    else objTemplateArchive.read(pszMemberName)
+                )
+                if objOutputArchive.read(pszMemberName) != bytesExpected:
+                    raise ValueError(
+                        "step0005 XLSXの指定セル以外が変更されました。Path = "
+                        + pszMemberName
+                    )
+            listDrawingParts = [
+                pszName
+                for pszName in listTemplateNames
+                if pszName.startswith("xl/drawings/")
+            ]
+            if any(pszName not in listOutputNames for pszName in listDrawingParts):
+                raise ValueError("step0005 XLSXの描画パーツが削除されました。")
+
+
+def replace_step0005_output_set(dictTemporaryOutputs: dict[Path, Path]) -> None:
+    """曜日別14ファイルを一括置換し、失敗時は以前の出力へ戻します。"""
+    dictBackups: dict[Path, Path] = {}
+    listReplaced: list[Path] = []
+    try:
+        for objOutputPath in dictTemporaryOutputs:
+            if objOutputPath.exists():
+                objBackupPath = create_temporary_path(objOutputPath)
+                os.replace(objOutputPath, objBackupPath)
+                dictBackups[objOutputPath] = objBackupPath
+        for objOutputPath, objTemporaryPath in dictTemporaryOutputs.items():
+            os.replace(objTemporaryPath, objOutputPath)
+            listReplaced.append(objOutputPath)
+    except Exception:
+        for objOutputPath in reversed(listReplaced):
+            objOutputPath.unlink(missing_ok=True)
+        for objOutputPath, objBackupPath in dictBackups.items():
+            if objBackupPath.exists():
+                os.replace(objBackupPath, objOutputPath)
+        raise
+    finally:
+        for objBackupPath in dictBackups.values():
+            objBackupPath.unlink(missing_ok=True)
+
+
+def create_step0005_outputs(
+    objHiroshimaTsvPath: Path,
+    tupleAreaTsvPaths: tuple[Path, Path, Path],
+    objOkayamaTsvPath: Path | None = None,
+) -> list[tuple[Path, Path]]:
+    """通常版または分割版step0004から月～日の鮮魚明細票を一括作成します。"""
+    listHiroshimaRows, _ = read_tsv_table(objHiroshimaTsvPath)
+    pszMarker = "ProductCodeSelector_step0004_"
+    pszSuffix = "_広島センター"
+    if objOkayamaTsvPath is None:
+        validate_weekly_xlsx_tsv_match(
+            objHiroshimaTsvPath.with_suffix(".xlsx"),
+            objHiroshimaTsvPath,
+            "step0004",
+        )
+        listShipmentDates, listDeliveryDates = validate_standard_step0005_input_dates(
+            listHiroshimaRows
+        )
+        validate_standard_step0005_quantities(
+            objHiroshimaTsvPath, listHiroshimaRows
+        )
+        listCounts = get_standard_step0005_order_counts(listHiroshimaRows)
+        if not objHiroshimaTsvPath.stem.startswith(pszMarker):
+            raise ValueError("通常版step0004 TSVのファイル名が仕様どおりではありません。")
+        pszIdentity = objHiroshimaTsvPath.stem[len(pszMarker) :]
+        bStandardInput = True
+    else:
+        listOkayamaRows, _ = read_tsv_table(objOkayamaTsvPath)
+        listShipmentDates, listDeliveryDates = validate_step0005_input_dates(
+            listHiroshimaRows, listOkayamaRows
+        )
+        validate_step0005_quantities(
+            objHiroshimaTsvPath, listHiroshimaRows, objOkayamaTsvPath, listOkayamaRows
+        )
+        listCounts = get_step0005_order_counts(listHiroshimaRows)
+        if not objHiroshimaTsvPath.stem.startswith(
+            pszMarker
+        ) or not objHiroshimaTsvPath.stem.endswith(pszSuffix):
+            raise ValueError(
+                "広島センターstep0004 TSVのファイル名が仕様どおりではありません。"
+            )
+        pszIdentity = objHiroshimaTsvPath.stem[len(pszMarker) : -len(pszSuffix)]
+        bStandardInput = False
+    dictOrdersByArea = {
+        pszArea: read_step0005_area_orders(objPath, pszArea)
+        for pszArea, objPath in zip(("広島", "岡山", "四国"), tupleAreaTsvPaths)
+    }
+    listSourceHiroshimaCounts = [
+        (len(listOrders), sum(iQuantity for _, _, iQuantity in listOrders))
+        for listOrders in dictOrdersByArea["広島"]
+    ]
+    if listSourceHiroshimaCounts != listCounts:
+        raise ValueError(
+            "step0003広島TSVとstep0004 TSVの広島注文件数・注文数が一致しません。"
+        )
+    objDirectory = objHiroshimaTsvPath.parent
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    listOutputPairs: list[tuple[Path, Path]] = []
+    try:
+        for iDay, (objShipmentDate, objDeliveryDate) in enumerate(
+            zip(listShipmentDates, listDeliveryDates)
+        ):
+            iStoreCount, _ = listCounts[iDay]
+            bDoubleHiroshima = False if bStandardInput else iStoreCount > 40
+            objTemplatePath = get_fresh_fish_template_path(bDoubleHiroshima)
+            dictDetailCells = build_step0005_detail_cells(
+                dictOrdersByArea["広島"][iDay],
+                dictOrdersByArea["岡山"][iDay],
+                dictOrdersByArea["四国"][iDay],
+                bDoubleHiroshima,
+            )
+            if not objTemplatePath.is_file():
+                raise ValueError(
+                    "鮮魚店別納入明細票テンプレートが見つかりません。"
+                    + "\n差し込み元テンプレート:\n"
+                    + objTemplatePath.name
+                    + "\n\n差し込み元テンプレートパス:\n"
+                    + str(objTemplatePath)
+                    + "\n\n対象納品日:\n"
+                    + objDeliveryDate.isoformat()
+                    + "\n\n対象納品曜日:\n"
+                    + WEEKDAYS[iDay]
+                    + "\n\n広島注文件数:\n"
+                    + str(iStoreCount)
+                    + "件\n\n広島注文数:\n"
+                    + str(listCounts[iDay][1])
+                    + "件"
+                )
+            pszDateSuffix = (
+                "_" + objDeliveryDate.isoformat() + "(" + WEEKDAYS[iDay] + ")"
+            )
+            pszStem = (
+                "ProductCodeSelector_step0005_"
+                + pszIdentity
+                + FRESH_FISH_OUTPUT_SUFFIX
+                + pszDateSuffix
+            )
+            objExcelPath = objDirectory / (pszStem + ".xlsx")
+            objTsvPath = objDirectory / (pszStem + ".tsv")
+            objExcelTemp = create_temporary_path(objExcelPath)
+            objTsvTemp = create_temporary_path(objTsvPath)
+            dictTemporaryOutputs[objExcelPath] = objExcelTemp
+            dictTemporaryOutputs[objTsvPath] = objTsvTemp
+            objWorkbook = load_workbook(objTemplatePath, data_only=False)
+            tupleTemplateSheetStates = tuple(
+                (objSheet.title, objSheet.sheet_state)
+                for objSheet in objWorkbook.worksheets
+            )
+            try:
+                if FRESH_FISH_TEMPLATE_SHEET_NAME not in objWorkbook.sheetnames:
+                    pszSheetDetails: str = "\n".join(
+                        objWorksheet.title + " (" + objWorksheet.sheet_state + ")"
+                        for objWorksheet in objWorkbook.worksheets
+                    ) or "なし"
+                    raise ValueError(
+                        "鮮魚店別納入明細票テンプレートに対象シートがありません。"
+                        + "\n差し込み元テンプレート:\n"
+                        + objTemplatePath.name
+                        + "\n\n差し込み元テンプレートパス:\n"
+                        + str(objTemplatePath)
+                        + "\n\n対象納品日:\n"
+                        + objDeliveryDate.isoformat()
+                        + "\n\n対象納品曜日:\n"
+                        + WEEKDAYS[iDay]
+                        + "\n\n広島注文件数:\n"
+                        + str(iStoreCount)
+                        + "件\n\n広島注文数:\n"
+                        + str(listCounts[iDay][1])
+                        + "件\n\n必要な対象シート:\n"
+                        + FRESH_FISH_TEMPLATE_SHEET_NAME
+                        + "\n\n認識したシート名と表示状態:\n"
+                        + pszSheetDetails
+                    )
+                objWorksheet = objWorkbook[FRESH_FISH_TEMPLATE_SHEET_NAME]
+                listTsvRows = [
+                    [
+                        normalize_weekly_tsv_value(
+                            objWorksheet.cell(iRow, iColumn).value
+                        )
+                        for iColumn in range(1, FRESH_FISH_MAX_COLUMN + 1)
+                    ]
+                    for iRow in range(1, FRESH_FISH_MAX_ROW + 1)
+                ]
+            finally:
+                objWorkbook.close()
+            for iRow in range(14, 54):
+                for iColumn in range(2, 14):
+                    listTsvRows[iRow - 1][iColumn - 1] = str(
+                        dictDetailCells.get((iRow, iColumn), "")
+                    )
+            listTsvRows[4][9] = format_japanese_date(objShipmentDate)
+            listTsvRows[5][9] = format_japanese_date(objDeliveryDate)
+            save_tsv_table(objTsvTemp, listTsvRows)
+            pszWorksheetPart = save_step0005_xlsx(
+                objTemplatePath,
+                objExcelTemp,
+                objShipmentDate,
+                objDeliveryDate,
+                dictDetailCells,
+            )
+            validate_step0005_xlsx_parts(
+                objTemplatePath,
+                objExcelTemp,
+                pszWorksheetPart,
+                objShipmentDate,
+                objDeliveryDate,
+                dictDetailCells,
+            )
+            objSavedWorkbook = load_workbook(objExcelTemp, data_only=False)
+            try:
+                if FRESH_FISH_TEMPLATE_SHEET_NAME not in objSavedWorkbook.sheetnames:
+                    raise ValueError(
+                        "保存後のstep0005 XLSXに対象シートがありません。シート = "
+                        + FRESH_FISH_TEMPLATE_SHEET_NAME
+                    )
+                tupleSavedSheetStates = tuple(
+                    (objSheet.title, objSheet.sheet_state)
+                    for objSheet in objSavedWorkbook.worksheets
+                )
+                if tupleSavedSheetStates != tupleTemplateSheetStates:
+                    raise ValueError(
+                        "step0005 XLSXのシート名・順番・表示状態が変更されました。"
+                    )
+                objSavedWorksheet = objSavedWorkbook[FRESH_FISH_TEMPLATE_SHEET_NAME]
+                for pszCell, objExpectedDate in (
+                    ("J5", objShipmentDate),
+                    ("J6", objDeliveryDate),
+                ):
+                    objValue = objSavedWorksheet[pszCell].value
+                    if isinstance(objValue, datetime):
+                        objValue = objValue.date()
+                    if objValue != objExpectedDate:
+                        raise ValueError("step0005 XLSXの日付が一致しません。セル = " + pszCell)
+                for iRow in range(14, 54):
+                    for iColumn in range(2, 14):
+                        objActualValue = objSavedWorksheet.cell(iRow, iColumn).value
+                        objExpectedValue = dictDetailCells.get((iRow, iColumn))
+                        if objActualValue != objExpectedValue:
+                            raise ValueError(
+                                "step0005 XLSXの店舗明細が一致しません。セル = "
+                                + get_column_letter(iColumn)
+                                + str(iRow)
+                            )
+            finally:
+                objSavedWorkbook.close()
+            listSavedRows, _ = read_tsv_table(objTsvTemp)
+            if len(listSavedRows) != FRESH_FISH_MAX_ROW or any(
+                len(listRow) != FRESH_FISH_MAX_COLUMN for listRow in listSavedRows
+            ):
+                raise ValueError("step0005 TSVが53行×13列ではありません。")
+            for iRow in range(14, 54):
+                for iColumn in range(2, 14):
+                    pszExpectedValue = str(dictDetailCells.get((iRow, iColumn), ""))
+                    if listSavedRows[iRow - 1][iColumn - 1] != pszExpectedValue:
+                        raise ValueError(
+                            "step0005 TSVの店舗明細が一致しません。セル = "
+                            + get_column_letter(iColumn)
+                            + str(iRow)
+                        )
+            listOutputPairs.append((objExcelPath, objTsvPath))
+        replace_step0005_output_set(dictTemporaryOutputs)
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            objTemporaryPath.unlink(missing_ok=True)
+    return listOutputPairs
+
+
+def write_step0005_error(objHiroshimaTsvPath: Path, pszMessage: str) -> Path:
+    """鮮魚店別納入明細票の専用_error.txtをUTF-8・CRLFで保存します。"""
+    pszMarker = "ProductCodeSelector_step0004_"
+    pszSuffix = "_広島センター"
+    pszStem = objHiroshimaTsvPath.stem
+    if pszStem.startswith(pszMarker) and pszStem.endswith(pszSuffix):
+        pszIdentity = pszStem[len(pszMarker) : -len(pszSuffix)]
+    elif pszStem.startswith(pszMarker):
+        pszIdentity = pszStem[len(pszMarker) :]
+    else:
+        pszIdentity = pszStem
+    objErrorPath = objHiroshimaTsvPath.with_name(
+        "ProductCodeSelector_step0005_"
+        + pszIdentity
+        + FRESH_FISH_OUTPUT_SUFFIX
+        + "_error.txt"
+    )
+    pszText = (
+        "処理名:\nProductCodeSelector step0005 鮮魚 店別納入明細票作成\n\n"
+        + "処理結果:\nエラー\n\nエラー内容:\n"
+        + pszMessage
+        + "\n"
+    )
+    objTemporaryPath = create_temporary_path(objErrorPath)
+    try:
+        objTemporaryPath.write_bytes(pszText.replace("\n", "\r\n").encode("utf-8"))
+        os.replace(objTemporaryPath, objErrorPath)
+    finally:
+        objTemporaryPath.unlink(missing_ok=True)
+    return objErrorPath
+
+
 def build_step0002_rows(
     listStep0001Rows: list[list[str]], objCandidate: ProductCandidate
 ) -> list[list[str]]:
@@ -2921,7 +3826,7 @@ def replace_result_text(objInputPath: Path, pszResult: str, pszText: str) -> Pat
 def write_error_text(objErrorPath: Path, pszErrorMessage: str) -> None:
     """処理エラーをUTF-8テキストで保存します。"""
     pszText: str = (
-        "処理名:\nProductCodeSelector step0001～step0004\n\n"
+        "処理名:\nProductCodeSelector step0001～step0005\n\n"
         + "エラー:\n"
         + pszErrorMessage
         + "\n"
@@ -2941,13 +3846,14 @@ def write_success_text(
     objStoreOrderBackupDirectory: Path | None,
     listStoreOrderArchivePaths: list[Path],
     listWeeklyOutputPaths: list[tuple[str, Path, Path, Path, Path]],
+    listStep0005OutputPaths: list[tuple[Path, Path]],
     pszProductName: str,
     objSelectedCandidate: ProductCandidate,
 ) -> Path:
     """全出力とバックアップ情報を今回の_success.txtへ保存します。"""
     listLines: list[str] = [
         "処理名:",
-        "ProductCodeSelector step0001～step0004",
+        "ProductCodeSelector step0001～step0005",
         "",
         "処理結果:",
         "成功",
@@ -2987,6 +3893,13 @@ def write_success_text(
                 pszPrefix + "step0004 TSV: " + str(objStep0004TsvPath),
             ]
         )
+    for objStep0005ExcelPath, objStep0005TsvPath in listStep0005OutputPaths:
+        listLines.extend(
+            [
+                "step0005 XLSX: " + str(objStep0005ExcelPath),
+                "step0005 TSV: " + str(objStep0005TsvPath),
+            ]
+        )
     listLines.extend(["", "バックアップ:"])
     if objStoreOrderBackupDirectory is None:
         listLines.append("なし")
@@ -3013,10 +3926,11 @@ def process_input_file(
     Path | None,
     list[Path],
     list[tuple[str, Path, Path, Path, Path]],
+    list[tuple[Path, Path]],
     str,
     ProductCandidate,
 ]:
-    """step0007からstep0001～step0004を順に作成します。"""
+    """step0007からstep0001～step0005を順に作成します。"""
     objInputPath: Path = validate_input_path(pszInputFileFullPath)
     create_abc_product_master(get_source_products_file_path(), get_products_file_path())
     if objInputPath.suffix.lower() == ".xlsx":
@@ -3112,6 +4026,7 @@ def process_input_file(
     listOkayamaRows = normalize_step0004_area_rows(tupleStoreOrderPaths[2], "岡山")
     listShikokuRows = normalize_step0004_area_rows(tupleStoreOrderPaths[3], "四国")
     listWeeklyOutputPaths: list[tuple[str, Path, Path, Path, Path]] = []
+    listStep0005OutputPaths: list[tuple[Path, Path]] = []
     if len(listHiroshimaRows) <= STEP0004_MAX_STORES_PER_AREA:
         objStep0003ExcelPath, objStep0003TsvPath = create_step0003_outputs(
             objStep0002ExcelPath, objStep0002TsvPath
@@ -3121,6 +4036,14 @@ def process_input_file(
             (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
             (listHiroshimaRows, listOkayamaRows, listShikokuRows),
         )
+        try:
+            listStep0005OutputPaths = create_step0005_outputs(
+                objStep0004TsvPath,
+                (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
+            )
+        except Exception as objException:
+            write_step0005_error(objStep0004TsvPath, str(objException))
+            raise
         listWeeklyOutputPaths.append(("", objStep0003ExcelPath, objStep0003TsvPath, objStep0004ExcelPath, objStep0004TsvPath))
     else:
         objH3x, objH3t = create_step0003_outputs(
@@ -3150,6 +4073,15 @@ def process_input_file(
             (listOkayamaRows, listShikokuRows),
             OKAYAMA_SHIKOKU_AREA_RANGES, HIROSHIMA_TSV_MAX_COLUMN,
         )
+        try:
+            listStep0005OutputPaths = create_step0005_outputs(
+                objH4t,
+                (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
+                objO4t,
+            )
+        except Exception as objException:
+            write_step0005_error(objH4t, str(objException))
+            raise
         listWeeklyOutputPaths.extend([
             ("広島センター", objH3x, objH3t, objH4x, objH4t),
             ("岡山四国", objO3x, objO3t, objO4x, objO4t),
@@ -3163,6 +4095,7 @@ def process_input_file(
         objStoreOrderBackupDirectory,
         listStoreOrderArchivePaths,
         listWeeklyOutputPaths,
+        listStep0005OutputPaths,
         pszProductName,
         objSelectedCandidate,
     )
@@ -3203,6 +4136,7 @@ def main() -> int:
             objStoreOrderBackupDirectory,
             listStoreOrderArchivePaths,
             listWeeklyOutputPaths,
+            listStep0005OutputPaths,
             pszProductName,
             objSelectedCandidate,
         ) = process_input_file(pszInputFileFullPath)
@@ -3216,6 +4150,7 @@ def main() -> int:
             objStoreOrderBackupDirectory,
             listStoreOrderArchivePaths,
             listWeeklyOutputPaths,
+            listStep0005OutputPaths,
             pszProductName,
             objSelectedCandidate,
         )
@@ -3240,7 +4175,7 @@ def main() -> int:
                 file=sys.stderr,
             )
         return 1
-    print("ProductCodeSelector step0001～step0004の作成が完了しました。")
+    print("ProductCodeSelector step0001～step0005の作成が完了しました。")
     print("商品名: " + pszProductName)
     print("選択商品: " + objSelectedCandidate.display_text)
     print("step0001 XLSX: " + str(objStep0001ExcelPath))
@@ -3270,6 +4205,9 @@ def main() -> int:
         print(pszPrefix + "step0003 TSV: " + str(objStep0003TsvPath))
         print(pszPrefix + "step0004 XLSX: " + str(objStep0004ExcelPath))
         print(pszPrefix + "step0004 TSV: " + str(objStep0004TsvPath))
+    for objStep0005ExcelPath, objStep0005TsvPath in listStep0005OutputPaths:
+        print("step0005 XLSX: " + str(objStep0005ExcelPath))
+        print("step0005 TSV: " + str(objStep0005TsvPath))
     return 0
 
 
