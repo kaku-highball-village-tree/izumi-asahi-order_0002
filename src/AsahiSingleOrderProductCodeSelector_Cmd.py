@@ -1479,8 +1479,10 @@ def get_zip_member_bytes(objArchive: zipfile.ZipFile, pszMemberName: str) -> byt
     return objArchive.read(pszMemberName)
 
 
-def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
-    """workbookとrelationshipからセンター週間のXMLパスを解決します。"""
+def get_named_worksheet_part_name(
+    objArchive: zipfile.ZipFile, pszSheetName: str
+) -> str:
+    """workbookとrelationshipから指定シートのXMLパスを解決します。"""
     pszWorkbookPart: str = "xl/workbook.xml"
     bytesWorkbook: bytes = get_zip_member_bytes(objArchive, pszWorkbookPart)
     objWorkbookRoot: ET.Element = ET.fromstring(bytesWorkbook)
@@ -1488,10 +1490,12 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         objElement
         for objElement in objWorkbookRoot.iter()
         if get_xml_local_name(objElement.tag) == "sheet"
-        and objElement.attrib.get("name") == WEEKLY_SHEET_NAME
+        and objElement.attrib.get("name") == pszSheetName
     ]
     if len(listMatchedSheets) != 1:
-        raise ValueError("XLSX内の「センター週間」シートを1つに特定できません。")
+        raise ValueError(
+            "XLSX内の「" + pszSheetName + "」シートを1つに特定できません。"
+        )
     pszRelationshipId: str = next(
         (
             pszValue
@@ -1501,7 +1505,7 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         "",
     )
     if not pszRelationshipId:
-        raise ValueError("「センター週間」シートのrelationship IDがありません。")
+        raise ValueError("「" + pszSheetName + "」シートのrelationship IDがありません。")
 
     pszRelationshipsPart: str = "xl/_rels/workbook.xml.rels"
     bytesRelationships: bytes = get_zip_member_bytes(objArchive, pszRelationshipsPart)
@@ -1513,13 +1517,15 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         and objElement.attrib.get("Id") == pszRelationshipId
     ]
     if len(listMatchedRelationships) != 1:
-        raise ValueError("「センター週間」シートのrelationshipを1つに特定できません。")
+        raise ValueError(
+            "「" + pszSheetName + "」シートのrelationshipを1つに特定できません。"
+        )
     objRelationship: ET.Element = listMatchedRelationships[0]
     if objRelationship.attrib.get("TargetMode", "Internal") != "Internal":
-        raise ValueError("「センター週間」シートがXLSX内部にありません。")
+        raise ValueError("「" + pszSheetName + "」シートがXLSX内部にありません。")
     pszTarget: str = objRelationship.attrib.get("Target", "").replace("\\", "/")
     if not pszTarget:
-        raise ValueError("「センター週間」シートのXMLパスがありません。")
+        raise ValueError("「" + pszSheetName + "」シートのXMLパスがありません。")
     if pszTarget.startswith("/"):
         pszWorksheetPart: str = posixpath.normpath(pszTarget.lstrip("/"))
     else:
@@ -1531,9 +1537,17 @@ def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
         or pszWorksheetPart not in objArchive.namelist()
     ):
         raise ValueError(
-            "「センター週間」シートのXMLが見つかりません。Path = " + pszWorksheetPart
+            "「"
+            + pszSheetName
+            + "」シートのXMLが見つかりません。Path = "
+            + pszWorksheetPart
         )
     return pszWorksheetPart
+
+
+def get_weekly_worksheet_part_name(objArchive: zipfile.ZipFile) -> str:
+    """workbookとrelationshipからセンター週間のXMLパスを解決します。"""
+    return get_named_worksheet_part_name(objArchive, WEEKLY_SHEET_NAME)
 
 
 def get_cell_xml_span(
@@ -3259,6 +3273,120 @@ def build_step0005_detail_cells(
     return dictCells
 
 
+def update_step0005_cells_in_worksheet_xml(
+    bytesWorksheet: bytes,
+    objShipmentDate: date,
+    objDeliveryDate: date,
+    objExcelEpoch: date,
+    dictDetailCells: dict[tuple[int, int], str | int],
+    iCellXfsCount: int,
+) -> bytes:
+    """鮮魚明細票の指定セル値だけを更新し、描画参照などは保持します。"""
+    for pszCellReference, objTargetDate in (
+        ("J5", objShipmentDate),
+        ("J6", objDeliveryDate),
+    ):
+        bytesWorksheet = update_excel_date_in_worksheet_xml(
+            bytesWorksheet,
+            pszCellReference,
+            (objTargetDate - objExcelEpoch).days,
+        )
+    for iRow in range(FRESH_FISH_DETAIL_START_ROW, FRESH_FISH_MAX_ROW + 1):
+        for iColumn in range(2, FRESH_FISH_MAX_COLUMN + 1):
+            objValue = dictDetailCells.get((iRow, iColumn), "")
+            pszValue = str(objValue) if objValue != "" else ""
+            bytesWorksheet = set_cell_value_in_worksheet_xml(
+                bytesWorksheet,
+                get_column_letter(iColumn) + str(iRow),
+                pszValue,
+                bNumeric=bool(pszValue) and iColumn not in (3, 7, 11),
+                iAreaStartRow=FRESH_FISH_DETAIL_START_ROW,
+                iAreaEndRow=FRESH_FISH_MAX_ROW,
+                iCellXfsCount=iCellXfsCount,
+            )
+    return bytesWorksheet
+
+
+def save_step0005_xlsx(
+    objTemplatePath: Path,
+    objOutputPath: Path,
+    objShipmentDate: date,
+    objDeliveryDate: date,
+    dictDetailCells: dict[tuple[int, int], str | int],
+) -> str:
+    """テンプレートの描画を保ち、鮮魚明細票のセル値だけを更新します。"""
+    with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
+        pszWorksheetPart = get_named_worksheet_part_name(
+            objSourceArchive, FRESH_FISH_TEMPLATE_SHEET_NAME
+        )
+        bytesWorksheet = get_zip_member_bytes(objSourceArchive, pszWorksheetPart)
+        bytesUpdatedWorksheet = update_step0005_cells_in_worksheet_xml(
+            bytesWorksheet,
+            objShipmentDate,
+            objDeliveryDate,
+            get_excel_date_epoch(objSourceArchive),
+            dictDetailCells,
+            get_cell_xfs_count(objSourceArchive),
+        )
+        with zipfile.ZipFile(objOutputPath, mode="w") as objOutputArchive:
+            objOutputArchive.comment = objSourceArchive.comment
+            for objInfo in objSourceArchive.infolist():
+                bytesContent = (
+                    bytesUpdatedWorksheet
+                    if objInfo.filename == pszWorksheetPart
+                    else objSourceArchive.read(objInfo.filename)
+                )
+                objOutputArchive.writestr(objInfo, bytesContent)
+    return pszWorksheetPart
+
+
+def validate_step0005_xlsx_parts(
+    objTemplatePath: Path,
+    objOutputPath: Path,
+    pszWorksheetPart: str,
+    objShipmentDate: date,
+    objDeliveryDate: date,
+    dictDetailCells: dict[tuple[int, int], str | int],
+) -> None:
+    """対象worksheet以外の全パーツと描画が不変であることを検証します。"""
+    with zipfile.ZipFile(objTemplatePath, mode="r") as objTemplateArchive:
+        with zipfile.ZipFile(objOutputPath, mode="r") as objOutputArchive:
+            listTemplateNames = [
+                objInfo.filename for objInfo in objTemplateArchive.infolist()
+            ]
+            listOutputNames = [
+                objInfo.filename for objInfo in objOutputArchive.infolist()
+            ]
+            if listTemplateNames != listOutputNames:
+                raise ValueError("step0005 XLSXの内部パーツ構成が変更されました。")
+            bytesExpectedWorksheet = update_step0005_cells_in_worksheet_xml(
+                get_zip_member_bytes(objTemplateArchive, pszWorksheetPart),
+                objShipmentDate,
+                objDeliveryDate,
+                get_excel_date_epoch(objTemplateArchive),
+                dictDetailCells,
+                get_cell_xfs_count(objTemplateArchive),
+            )
+            for pszMemberName in listTemplateNames:
+                bytesExpected = (
+                    bytesExpectedWorksheet
+                    if pszMemberName == pszWorksheetPart
+                    else objTemplateArchive.read(pszMemberName)
+                )
+                if objOutputArchive.read(pszMemberName) != bytesExpected:
+                    raise ValueError(
+                        "step0005 XLSXの指定セル以外が変更されました。Path = "
+                        + pszMemberName
+                    )
+            listDrawingParts = [
+                pszName
+                for pszName in listTemplateNames
+                if pszName.startswith("xl/drawings/")
+            ]
+            if any(pszName not in listOutputNames for pszName in listDrawingParts):
+                raise ValueError("step0005 XLSXの描画パーツが削除されました。")
+
+
 def replace_step0005_output_set(dictTemporaryOutputs: dict[Path, Path]) -> None:
     """曜日別14ファイルを一括置換し、失敗時は以前の出力へ戻します。"""
     dictBackups: dict[Path, Path] = {}
@@ -3387,8 +3515,7 @@ def create_step0005_outputs(
             objTsvTemp = create_temporary_path(objTsvPath)
             dictTemporaryOutputs[objExcelPath] = objExcelTemp
             dictTemporaryOutputs[objTsvPath] = objTsvTemp
-            shutil.copy2(objTemplatePath, objExcelTemp)
-            objWorkbook = load_workbook(objExcelTemp)
+            objWorkbook = load_workbook(objTemplatePath, data_only=False)
             tupleTemplateSheetStates = tuple(
                 (objSheet.title, objSheet.sheet_state)
                 for objSheet in objWorkbook.worksheets
@@ -3419,17 +3546,6 @@ def create_step0005_outputs(
                         + pszSheetDetails
                     )
                 objWorksheet = objWorkbook[FRESH_FISH_TEMPLATE_SHEET_NAME]
-                for pszRange in FRESH_FISH_CLEAR_RANGES:
-                    for tupleCells in objWorksheet[pszRange]:
-                        for objCell in tupleCells:
-                            objCell.value = None
-                objWorksheet["J5"] = objShipmentDate
-                objWorksheet["J6"] = objDeliveryDate
-                objWorksheet["J5"].number_format = "yyyy年m月d日(aaa)"
-                objWorksheet["J6"].number_format = "yyyy年m月d日(aaa)"
-                for (iRow, iColumn), objValue in dictDetailCells.items():
-                    objWorksheet.cell(iRow, iColumn).value = objValue
-                objWorkbook.save(objExcelTemp)
                 listTsvRows = [
                     [
                         normalize_weekly_tsv_value(
@@ -3439,11 +3555,31 @@ def create_step0005_outputs(
                     ]
                     for iRow in range(1, FRESH_FISH_MAX_ROW + 1)
                 ]
-                listTsvRows[4][9] = format_japanese_date(objShipmentDate)
-                listTsvRows[5][9] = format_japanese_date(objDeliveryDate)
-                save_tsv_table(objTsvTemp, listTsvRows)
             finally:
                 objWorkbook.close()
+            for iRow in range(14, 54):
+                for iColumn in range(2, 14):
+                    listTsvRows[iRow - 1][iColumn - 1] = str(
+                        dictDetailCells.get((iRow, iColumn), "")
+                    )
+            listTsvRows[4][9] = format_japanese_date(objShipmentDate)
+            listTsvRows[5][9] = format_japanese_date(objDeliveryDate)
+            save_tsv_table(objTsvTemp, listTsvRows)
+            pszWorksheetPart = save_step0005_xlsx(
+                objTemplatePath,
+                objExcelTemp,
+                objShipmentDate,
+                objDeliveryDate,
+                dictDetailCells,
+            )
+            validate_step0005_xlsx_parts(
+                objTemplatePath,
+                objExcelTemp,
+                pszWorksheetPart,
+                objShipmentDate,
+                objDeliveryDate,
+                dictDetailCells,
+            )
             objSavedWorkbook = load_workbook(objExcelTemp, data_only=False)
             try:
                 if FRESH_FISH_TEMPLATE_SHEET_NAME not in objSavedWorkbook.sheetnames:
