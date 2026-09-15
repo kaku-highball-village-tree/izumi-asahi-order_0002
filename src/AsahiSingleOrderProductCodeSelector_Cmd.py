@@ -3299,7 +3299,7 @@ def update_step0005_cells_in_worksheet_xml(
                 bytesWorksheet,
                 get_column_letter(iColumn) + str(iRow),
                 pszValue,
-                bNumeric=bool(pszValue) and iColumn not in (3, 7, 11),
+                bNumeric=bool(pszValue) and iColumn in (4, 8, 12),
                 iAreaStartRow=FRESH_FISH_DETAIL_START_ROW,
                 iAreaEndRow=FRESH_FISH_MAX_ROW,
                 iCellXfsCount=iCellXfsCount,
