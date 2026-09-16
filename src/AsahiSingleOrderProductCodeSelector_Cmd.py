@@ -22,6 +22,7 @@ import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -67,10 +68,11 @@ FRESH_FISH_DOUBLE_TEMPLATE_FILE_NAME: str = (
 FRESH_FISH_OUTPUT_SUFFIX: str = "_鮮魚_店別納入明細票"
 FRESH_FISH_SHEET_NAME: str = "センター週間"
 FRESH_FISH_TEMPLATE_SHEET_NAME: str = "店別納入明細票"
-FRESH_FISH_MAX_ROW: int = 53
+FRESH_FISH_MAX_ROW: int = 60
 FRESH_FISH_MAX_COLUMN: int = 13
 FRESH_FISH_CLEAR_RANGES: tuple[str, ...] = ("B14:E53", "F14:I53", "J14:M53")
 FRESH_FISH_DETAIL_START_ROW: int = 14
+FRESH_FISH_DETAIL_END_ROW: int = 53
 FRESH_FISH_DETAIL_CAPACITY: int = 40
 WEEKLY_SHEET_NAME: str = "センター週間"
 WEEKLY_TSV_MAX_ROW: int = 42
@@ -2138,17 +2140,18 @@ def normalize_step0004_area_rows(
             if not pszQuantity:
                 listNormalizedQuantities.append("")
                 continue
-            if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
-                raise ValueError(
-                    "step0003 "
-                    + pszAreaName
-                    + " TSVの発注数量が整数ではありません。行 = "
-                    + str(iRow)
-                    + "、列 = "
-                    + str(iColumn)
-                )
-            iQuantity: int = int(pszQuantity)
-            listNormalizedQuantities.append("" if iQuantity == 0 else str(iQuantity))
+            objQuantity = parse_step0005_quantity(
+                pszQuantity,
+                "step0003 "
+                + pszAreaName
+                + " TSV、行 = "
+                + str(iRow)
+                + "、列 = "
+                + str(iColumn),
+            )
+            listNormalizedQuantities.append(
+                "" if objQuantity == 0 else str(objQuantity)
+            )
         listNormalizedRows.append(
             [
                 str(int(objStoreCodeMatch.group(1))),
@@ -2958,11 +2961,41 @@ def validate_standard_step0005_input_dates(
     return listShipmentGroups[0], listDeliveryGroups[0]
 
 
+def parse_step0005_quantity(pszQuantity: str, pszSource: str) -> int | float:
+    """空欄・0・0.5・正整数だけを鮮魚の有効数量として返します。"""
+    pszNormalized = pszQuantity.strip()
+    if not pszNormalized:
+        return 0
+    try:
+        objQuantity = Decimal(pszNormalized)
+    except InvalidOperation as objException:
+        raise ValueError(
+            "注文数量が数値ではありません。" + pszSource + "、値 = " + pszQuantity
+        ) from objException
+    if not objQuantity.is_finite():
+        raise ValueError(
+            "注文数量が有限値ではありません。" + pszSource + "、値 = " + pszQuantity
+        )
+    if objQuantity < 0:
+        raise ValueError(
+            "注文数量に負数があります。" + pszSource + "、値 = " + pszQuantity
+        )
+    if objQuantity == Decimal("0.5"):
+        return 0.5
+    if objQuantity == objQuantity.to_integral_value():
+        return int(objQuantity)
+    raise ValueError(
+        "注文数量は0.5または0以上の整数ではありません。"
+        + pszSource
+        + "、値 = "
+        + pszQuantity
+    )
+
+
 def validate_standard_step0005_quantities(
     objInputPath: Path, listRows: list[list[str]]
 ) -> None:
-    """通常3エリア版の全数量を検証し、負数のファイル・セルを列挙します。"""
-    listNegativeDetails: list[str] = []
+    """通常3エリア版の全数量が0、0.5、正整数のいずれかか検証します。"""
     for pszArea, iStoreColumn, iQuantityStartColumn in (
         ("広島", 2, 4),
         ("岡山", 11, 13),
@@ -2974,22 +3007,46 @@ def validate_standard_step0005_quantities(
             for iOffset, pszWeekday in enumerate(WEEKDAYS):
                 iColumn = iQuantityStartColumn + iOffset
                 pszQuantity = listRows[iRow - 1][iColumn - 1].strip()
-                if not pszQuantity:
-                    continue
-                if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
-                    raise ValueError(
-                        "通常版step0004 TSVの注文数量が整数ではありません。ファイル = "
-                        + str(objInputPath)
-                        + "、シート = "
-                        + FRESH_FISH_SHEET_NAME
-                        + "、セル = "
-                        + get_column_letter(iColumn)
-                        + str(iRow)
-                    )
-                if int(pszQuantity) < 0:
-                    listNegativeDetails.append(
+                parse_step0005_quantity(
+                    pszQuantity,
+                    "ファイル = "
+                    + str(objInputPath)
+                    + "、シート = "
+                    + FRESH_FISH_SHEET_NAME
+                    + "、セル = "
+                    + get_column_letter(iColumn)
+                    + str(iRow)
+                    + "、エリア = "
+                    + pszArea
+                    + "、店舗コード = "
+                    + pszStoreCode
+                    + "、店舗略称 = "
+                    + pszStoreName
+                    + "、納品曜日 = "
+                    + pszWeekday,
+                )
+def validate_step0005_quantities(
+    objHiroshimaPath: Path,
+    listHiroshimaRows: list[list[str]],
+    objOkayamaPath: Path,
+    listOkayamaRows: list[list[str]],
+) -> None:
+    """分割版の全数量が0、0.5、正整数のいずれかか検証します。"""
+    for objPath, listRows, tupleAreas in (
+        (objHiroshimaPath, listHiroshimaRows, (("広島", 2, 4), ("広島", 11, 13))),
+        (objOkayamaPath, listOkayamaRows, (("岡山", 2, 4), ("四国", 11, 13))),
+    ):
+        for pszArea, iStoreColumn, iQuantityStartColumn in tupleAreas:
+            for iRow in range(12, 43):
+                pszStoreCode = listRows[iRow - 1][iStoreColumn - 1].strip()
+                pszStoreName = listRows[iRow - 1][iStoreColumn].strip()
+                for iOffset, pszWeekday in enumerate(WEEKDAYS):
+                    iColumn = iQuantityStartColumn + iOffset
+                    pszQuantity = listRows[iRow - 1][iColumn - 1].strip()
+                    parse_step0005_quantity(
+                        pszQuantity,
                         "ファイル = "
-                        + str(objInputPath)
+                        + str(objPath)
                         + "、シート = "
                         + FRESH_FISH_SHEET_NAME
                         + "、セル = "
@@ -3002,86 +3059,17 @@ def validate_standard_step0005_quantities(
                         + "、店舗略称 = "
                         + pszStoreName
                         + "、納品曜日 = "
-                        + pszWeekday
-                        + "、値 = "
-                        + pszQuantity
+                        + pszWeekday,
                     )
-    if listNegativeDetails:
-        raise ValueError(
-            "注文数量に負数があります。負数件数 = "
-            + str(len(listNegativeDetails))
-            + "\n"
-            + "\n".join(listNegativeDetails)
-        )
-
-
-def validate_step0005_quantities(
-    objHiroshimaPath: Path,
-    listHiroshimaRows: list[list[str]],
-    objOkayamaPath: Path,
-    listOkayamaRows: list[list[str]],
-) -> None:
-    """全店舗の数量を検証し、負数があればファイル・シート・セルを列挙します。"""
-    listNegativeDetails: list[str] = []
-    for objPath, listRows, tupleAreas in (
-        (objHiroshimaPath, listHiroshimaRows, (("広島", 2, 4), ("広島", 11, 13))),
-        (objOkayamaPath, listOkayamaRows, (("岡山", 2, 4), ("四国", 11, 13))),
-    ):
-        for pszArea, iStoreColumn, iQuantityStartColumn in tupleAreas:
-            for iRow in range(12, 43):
-                pszStoreCode = listRows[iRow - 1][iStoreColumn - 1].strip()
-                pszStoreName = listRows[iRow - 1][iStoreColumn].strip()
-                for iOffset, pszWeekday in enumerate(WEEKDAYS):
-                    iColumn = iQuantityStartColumn + iOffset
-                    pszQuantity = listRows[iRow - 1][iColumn - 1].strip()
-                    if not pszQuantity:
-                        continue
-                    if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
-                        raise ValueError(
-                            "step0004 TSVの注文数量が整数ではありません。ファイル = "
-                            + str(objPath)
-                            + "、シート = "
-                            + FRESH_FISH_SHEET_NAME
-                            + "、セル = "
-                            + get_column_letter(iColumn)
-                            + str(iRow)
-                        )
-                    if int(pszQuantity) < 0:
-                        listNegativeDetails.append(
-                            "ファイル = "
-                            + str(objPath)
-                            + "、シート = "
-                            + FRESH_FISH_SHEET_NAME
-                            + "、セル = "
-                            + get_column_letter(iColumn)
-                            + str(iRow)
-                            + "、エリア = "
-                            + pszArea
-                            + "、店舗コード = "
-                            + pszStoreCode
-                            + "、店舗略称 = "
-                            + pszStoreName
-                            + "、納品曜日 = "
-                            + pszWeekday
-                            + "、値 = "
-                            + pszQuantity
-                        )
-    if listNegativeDetails:
-        raise ValueError(
-            "注文数量に負数があります。負数件数 = "
-            + str(len(listNegativeDetails))
-            + "\n"
-            + "\n".join(listNegativeDetails)
-        )
 
 
 def get_step0005_order_counts(
     listHiroshimaRows: list[list[str]],
-) -> list[tuple[int, int]]:
+) -> list[tuple[int, int | float]]:
     """月～日の広島の（注文件数、注文数）を返します。"""
-    listCounts: list[tuple[int, int]] = []
+    listCounts: list[tuple[int, int | float]] = []
     for iOffset in range(7):
-        listQuantities: list[int] = []
+        listQuantities: list[int | float] = []
         for iStoreColumn, iQuantityStartColumn in ((2, 4), (11, 13)):
             for iRow in range(12, 43):
                 if not listHiroshimaRows[iRow - 1][iStoreColumn - 1].strip():
@@ -3089,7 +3077,9 @@ def get_step0005_order_counts(
                 pszQuantity = listHiroshimaRows[iRow - 1][
                     iQuantityStartColumn - 1 + iOffset
                 ].strip()
-                listQuantities.append(int(pszQuantity) if pszQuantity else 0)
+                listQuantities.append(
+                    parse_step0005_quantity(pszQuantity, "広島センターstep0004 TSV")
+                )
         listCounts.append(
             (sum(iQuantity > 0 for iQuantity in listQuantities), sum(listQuantities))
         )
@@ -3098,7 +3088,7 @@ def get_step0005_order_counts(
 
 def get_standard_step0005_order_counts(
     listRows: list[list[str]],
-) -> list[tuple[int, int]]:
+) -> list[tuple[int, int | float]]:
     """通常3エリア版から月～日の広島の（注文件数、注文数）を返します。"""
     iHiroshimaStoreCount: int = sum(
         bool(listRows[iRow - 1][1].strip()) for iRow in range(12, 43)
@@ -3108,14 +3098,16 @@ def get_standard_step0005_order_counts(
             "通常版step0004 TSVの広島店舗数が30店舗を超えています。店舗数 = "
             + str(iHiroshimaStoreCount)
         )
-    listCounts: list[tuple[int, int]] = []
+    listCounts: list[tuple[int, int | float]] = []
     for iOffset in range(7):
-        listQuantities: list[int] = []
+        listQuantities: list[int | float] = []
         for iRow in range(12, 43):
             if not listRows[iRow - 1][1].strip():
                 continue
             pszQuantity = listRows[iRow - 1][3 + iOffset].strip()
-            listQuantities.append(int(pszQuantity) if pszQuantity else 0)
+            listQuantities.append(
+                parse_step0005_quantity(pszQuantity, "通常版step0004 TSV")
+            )
         listCounts.append(
             (sum(iQuantity > 0 for iQuantity in listQuantities), sum(listQuantities))
         )
@@ -3129,12 +3121,13 @@ def format_japanese_date(objDate: date) -> str:
 
 def read_step0005_area_orders(
     objInputPath: Path, pszArea: str
-) -> list[list[tuple[str, str, int]]]:
+) -> list[list[tuple[str, str, int | float]]]:
     """地域別step0003 TSVを検証し、月～日の注文あり店舗を返します。"""
     listRows, _ = read_tsv_table(objInputPath)
-    listOrdersByDay: list[list[tuple[str, str, int]]] = [[] for _ in WEEKDAYS]
+    listOrdersByDay: list[list[tuple[str, str, int | float]]] = [
+        [] for _ in WEEKDAYS
+    ]
     setStoreCodes: set[str] = set()
-    listNegativeDetails: list[str] = []
     for iRow, listRow in enumerate(listRows, start=1):
         if len(listRow) != 9:
             raise ValueError(
@@ -3172,60 +3165,42 @@ def read_step0005_area_orders(
         setStoreCodes.add(pszStoreCode)
         for iDay, pszWeekday in enumerate(WEEKDAYS):
             pszQuantity = listRow[iDay + 2].strip()
-            if not pszQuantity:
-                continue
-            if re.fullmatch(r"[+-]?\d+", pszQuantity) is None:
-                raise ValueError(
-                    "step0003地域別TSVの注文数量が整数ではありません。ファイル = "
-                    + str(objInputPath)
-                    + "、セル = "
-                    + get_column_letter(iDay + 3)
-                    + str(iRow)
-                )
-            iQuantity = int(pszQuantity)
-            if iQuantity < 0:
-                listNegativeDetails.append(
-                    "ファイル = "
-                    + str(objInputPath)
-                    + "、シート = "
-                    + pszArea
-                    + "、セル = "
-                    + get_column_letter(iDay + 3)
-                    + str(iRow)
-                    + "、店舗コード = "
-                    + pszStoreCode
-                    + "、店舗略称 = "
-                    + pszStoreName
-                    + "、納品曜日 = "
-                    + pszWeekday
-                    + "、値 = "
-                    + pszQuantity
-                )
-            elif iQuantity > 0:
+            iQuantity = parse_step0005_quantity(
+                pszQuantity,
+                "ファイル = "
+                + str(objInputPath)
+                + "、シート = "
+                + pszArea
+                + "、セル = "
+                + get_column_letter(iDay + 3)
+                + str(iRow)
+                + "、店舗コード = "
+                + pszStoreCode
+                + "、店舗略称 = "
+                + pszStoreName
+                + "、納品曜日 = "
+                + pszWeekday,
+            )
+            if iQuantity > 0:
                 listOrdersByDay[iDay].append(
                     (pszStoreCode, pszStoreName, iQuantity)
                 )
-    if listNegativeDetails:
-        raise ValueError(
-            "注文数量に負数があります。負数件数 = "
-            + str(len(listNegativeDetails))
-            + "\n"
-            + "\n".join(listNegativeDetails)
-        )
     return listOrdersByDay
 
 
 def build_step0005_detail_cells(
-    listHiroshimaOrders: list[tuple[str, str, int]],
-    listOkayamaOrders: list[tuple[str, str, int]],
-    listShikokuOrders: list[tuple[str, str, int]],
+    listHiroshimaOrders: list[tuple[str, str, int | float]],
+    listOkayamaOrders: list[tuple[str, str, int | float]],
+    listShikokuOrders: list[tuple[str, str, int | float]],
     bDoubleHiroshima: bool,
-) -> dict[tuple[int, int], str | int]:
+) -> dict[tuple[int, int], str | int | float]:
     """選択テンプレートの地域配置に従う明細セル値を返します。"""
-    dictCells: dict[tuple[int, int], str | int] = {}
+    dictCells: dict[tuple[int, int], str | int | float] = {}
 
     def add_orders(
-        listOrders: list[tuple[str, str, int]], iStartColumn: int, iStartRow: int
+        listOrders: list[tuple[str, str, int | float]],
+        iStartColumn: int,
+        iStartRow: int,
     ) -> None:
         for iOffset, (pszCode, pszName, iQuantity) in enumerate(listOrders):
             iRow = iStartRow + iOffset
@@ -3273,12 +3248,51 @@ def build_step0005_detail_cells(
     return dictCells
 
 
+def build_step0005_summary_cells(
+    listHiroshimaOrders: list[tuple[str, str, int | float]],
+    listOkayamaOrders: list[tuple[str, str, int | float]],
+    listShikokuOrders: list[tuple[str, str, int | float]],
+) -> dict[tuple[int, int], int]:
+    """3地区のロイン・ハーフロインのケース数と小計を返します。"""
+
+    def count_cases(
+        listOrders: list[tuple[str, str, int | float]],
+    ) -> tuple[int, int, int]:
+        iLoinCases = sum(
+            int(objQuantity)
+            for _, _, objQuantity in listOrders
+            if isinstance(objQuantity, int) and objQuantity >= 1
+        )
+        iHalfLoinCases = sum(
+            objQuantity == 0.5 for _, _, objQuantity in listOrders
+        )
+        return iLoinCases, iHalfLoinCases, iLoinCases + iHalfLoinCases
+
+    tupleHiroshima = count_cases(listHiroshimaOrders)
+    tupleOkayama = count_cases(listOkayamaOrders)
+    tupleShikoku = count_cases(listShikokuOrders)
+    return {
+        (55, 4): tupleHiroshima[0],
+        (56, 4): tupleHiroshima[1],
+        (57, 4): tupleHiroshima[2],
+        (55, 8): tupleOkayama[0],
+        (56, 8): tupleOkayama[1],
+        (57, 8): tupleOkayama[2],
+        (55, 12): tupleShikoku[0],
+        (56, 12): tupleShikoku[1],
+        (57, 12): tupleShikoku[2],
+        (58, 4): tupleHiroshima[0] + tupleOkayama[0] + tupleShikoku[0],
+        (59, 4): tupleHiroshima[1] + tupleOkayama[1] + tupleShikoku[1],
+        (60, 4): tupleHiroshima[2] + tupleOkayama[2] + tupleShikoku[2],
+    }
+
+
 def update_step0005_cells_in_worksheet_xml(
     bytesWorksheet: bytes,
     objShipmentDate: date,
     objDeliveryDate: date,
     objExcelEpoch: date,
-    dictDetailCells: dict[tuple[int, int], str | int],
+    dictDetailCells: dict[tuple[int, int], str | int | float],
     iCellXfsCount: int,
 ) -> bytes:
     """鮮魚明細票の指定セル値だけを更新し、描画参照などは保持します。"""
@@ -3291,7 +3305,7 @@ def update_step0005_cells_in_worksheet_xml(
             pszCellReference,
             (objTargetDate - objExcelEpoch).days,
         )
-    for iRow in range(FRESH_FISH_DETAIL_START_ROW, FRESH_FISH_MAX_ROW + 1):
+    for iRow in range(FRESH_FISH_DETAIL_START_ROW, FRESH_FISH_DETAIL_END_ROW + 1):
         for iColumn in range(2, FRESH_FISH_MAX_COLUMN + 1):
             objValue = dictDetailCells.get((iRow, iColumn), "")
             pszValue = str(objValue) if objValue != "" else ""
@@ -3301,9 +3315,32 @@ def update_step0005_cells_in_worksheet_xml(
                 pszValue,
                 bNumeric=bool(pszValue) and iColumn in (4, 8, 12),
                 iAreaStartRow=FRESH_FISH_DETAIL_START_ROW,
-                iAreaEndRow=FRESH_FISH_MAX_ROW,
+                iAreaEndRow=FRESH_FISH_DETAIL_END_ROW,
                 iCellXfsCount=iCellXfsCount,
             )
+    for iRow, iColumn in (
+        (55, 4),
+        (56, 4),
+        (57, 4),
+        (55, 8),
+        (56, 8),
+        (57, 8),
+        (55, 12),
+        (56, 12),
+        (57, 12),
+        (58, 4),
+        (59, 4),
+        (60, 4),
+    ):
+        bytesWorksheet = set_cell_value_in_worksheet_xml(
+            bytesWorksheet,
+            get_column_letter(iColumn) + str(iRow),
+            str(dictDetailCells[(iRow, iColumn)]),
+            bNumeric=True,
+            iAreaStartRow=55,
+            iAreaEndRow=60,
+            iCellXfsCount=iCellXfsCount,
+        )
     return bytesWorksheet
 
 
@@ -3312,7 +3349,7 @@ def save_step0005_xlsx(
     objOutputPath: Path,
     objShipmentDate: date,
     objDeliveryDate: date,
-    dictDetailCells: dict[tuple[int, int], str | int],
+    dictDetailCells: dict[tuple[int, int], str | int | float],
 ) -> str:
     """テンプレートの描画を保ち、鮮魚明細票のセル値だけを更新します。"""
     with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
@@ -3346,7 +3383,7 @@ def validate_step0005_xlsx_parts(
     pszWorksheetPart: str,
     objShipmentDate: date,
     objDeliveryDate: date,
-    dictDetailCells: dict[tuple[int, int], str | int],
+    dictDetailCells: dict[tuple[int, int], str | int | float],
 ) -> None:
     """対象worksheet以外の全パーツと描画が不変であることを検証します。"""
     with zipfile.ZipFile(objTemplatePath, mode="r") as objTemplateArchive:
@@ -3483,6 +3520,13 @@ def create_step0005_outputs(
                 dictOrdersByArea["四国"][iDay],
                 bDoubleHiroshima,
             )
+            dictDetailCells.update(
+                build_step0005_summary_cells(
+                    dictOrdersByArea["広島"][iDay],
+                    dictOrdersByArea["岡山"][iDay],
+                    dictOrdersByArea["四国"][iDay],
+                )
+            )
             if not objTemplatePath.is_file():
                 raise ValueError(
                     "鮮魚店別納入明細票テンプレートが見つかりません。"
@@ -3562,6 +3606,23 @@ def create_step0005_outputs(
                     listTsvRows[iRow - 1][iColumn - 1] = str(
                         dictDetailCells.get((iRow, iColumn), "")
                     )
+            for iRow, iColumn in (
+                (55, 4),
+                (56, 4),
+                (57, 4),
+                (55, 8),
+                (56, 8),
+                (57, 8),
+                (55, 12),
+                (56, 12),
+                (57, 12),
+                (58, 4),
+                (59, 4),
+                (60, 4),
+            ):
+                listTsvRows[iRow - 1][iColumn - 1] = str(
+                    dictDetailCells[(iRow, iColumn)]
+                )
             listTsvRows[4][9] = format_japanese_date(objShipmentDate)
             listTsvRows[5][9] = format_japanese_date(objDeliveryDate)
             save_tsv_table(objTsvTemp, listTsvRows)
@@ -3615,13 +3676,35 @@ def create_step0005_outputs(
                                 + get_column_letter(iColumn)
                                 + str(iRow)
                             )
+                for iRow, iColumn in (
+                    (55, 4),
+                    (56, 4),
+                    (57, 4),
+                    (55, 8),
+                    (56, 8),
+                    (57, 8),
+                    (55, 12),
+                    (56, 12),
+                    (57, 12),
+                    (58, 4),
+                    (59, 4),
+                    (60, 4),
+                ):
+                    if objSavedWorksheet.cell(iRow, iColumn).value != dictDetailCells[
+                        (iRow, iColumn)
+                    ]:
+                        raise ValueError(
+                            "step0005 XLSXの箱数集計が一致しません。セル = "
+                            + get_column_letter(iColumn)
+                            + str(iRow)
+                        )
             finally:
                 objSavedWorkbook.close()
             listSavedRows, _ = read_tsv_table(objTsvTemp)
             if len(listSavedRows) != FRESH_FISH_MAX_ROW or any(
                 len(listRow) != FRESH_FISH_MAX_COLUMN for listRow in listSavedRows
             ):
-                raise ValueError("step0005 TSVが53行×13列ではありません。")
+                raise ValueError("step0005 TSVが60行×13列ではありません。")
             for iRow in range(14, 54):
                 for iColumn in range(2, 14):
                     pszExpectedValue = str(dictDetailCells.get((iRow, iColumn), ""))
@@ -3631,6 +3714,28 @@ def create_step0005_outputs(
                             + get_column_letter(iColumn)
                             + str(iRow)
                         )
+            for iRow, iColumn in (
+                (55, 4),
+                (56, 4),
+                (57, 4),
+                (55, 8),
+                (56, 8),
+                (57, 8),
+                (55, 12),
+                (56, 12),
+                (57, 12),
+                (58, 4),
+                (59, 4),
+                (60, 4),
+            ):
+                if listSavedRows[iRow - 1][iColumn - 1] != str(
+                    dictDetailCells[(iRow, iColumn)]
+                ):
+                    raise ValueError(
+                        "step0005 TSVの箱数集計が一致しません。セル = "
+                        + get_column_letter(iColumn)
+                        + str(iRow)
+                    )
             listOutputPairs.append((objExcelPath, objTsvPath))
         replace_step0005_output_set(dictTemporaryOutputs)
     finally:
