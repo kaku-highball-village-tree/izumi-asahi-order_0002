@@ -3367,11 +3367,12 @@ def update_step0005_cells_in_worksheet_xml(
                 iCellXfsCount=iCellXfsCount,
             )
     for iRow, iColumn in FRESH_FISH_SUMMARY_CELLS:
+        objValue = dictDetailCells[(iRow, iColumn)]
         bytesWorksheet = set_cell_value_in_worksheet_xml(
             bytesWorksheet,
             get_column_letter(iColumn) + str(iRow),
-            str(dictDetailCells[(iRow, iColumn)]),
-            bNumeric=bool(dictDetailCells[(iRow, iColumn)]),
+            str(objValue),
+            bNumeric=objValue != "",
             iAreaStartRow=55,
             iAreaEndRow=60,
             iCellXfsCount=iCellXfsCount,
