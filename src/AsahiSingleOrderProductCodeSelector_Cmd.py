@@ -1394,26 +1394,14 @@ def validate_weekly_template(
 
 
 def validate_standard_weekly_subtotal_template(objWorksheet: Worksheet) -> None:
-    """標準3列版の小計ラベルと空欄の小計数値セルを確認します。"""
-    for pszArea, iRow, iLabelColumn, iQuantityStartColumn in STEP0004_SUBTOTAL_RANGES:
-        if normalize_weekly_tsv_value(
-            objWorksheet.cell(iRow, iLabelColumn).value
-        ).strip() != "小計":
+    """標準3列版の小計用8行目がすべて空欄であることを確認します。"""
+    for iColumn in range(1, WEEKLY_TSV_MAX_COLUMN + 1):
+        if objWorksheet.cell(8, iColumn).value is not None:
             raise ValueError(
-                "標準3列版週間予定表の小計ラベルが正しくありません。エリア = "
-                + pszArea
-                + "、セル = "
-                + get_column_letter(iLabelColumn)
-                + str(iRow)
+                "標準3列版週間予定表の小計用8行目が空欄ではありません。セル = "
+                + get_column_letter(iColumn)
+                + "8"
             )
-        for iOffset in range(7):
-            iColumn = iQuantityStartColumn + iOffset
-            if objWorksheet.cell(iRow, iColumn).value is not None:
-                raise ValueError(
-                    "標準3列版週間予定表の小計数値セルが空欄ではありません。セル = "
-                    + get_column_letter(iColumn)
-                    + str(iRow)
-                )
 
 
 def build_weekly_tsv_rows(
@@ -2279,9 +2267,10 @@ def build_step0004_rows(
             listOutputRows[iStartRow - 1 + iRowOffset][
                 iStartColumn - 1 : iEndColumn
             ] = listAreaRow
-    for (_, iSubtotalRow, _, iQuantityStartColumn), listAreaRows in zip(
+    for (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn), listAreaRows in zip(
         tupleSubtotalRanges, tupleAreaRows
     ):
+        listOutputRows[iSubtotalRow - 1][iLabelColumn - 1] = "小計"
         for iOffset in range(7):
             objSubtotal = sum(
                 Decimal(listAreaRow[iOffset + 2] or "0")
@@ -2793,9 +2782,18 @@ def update_step0004_cells_in_worksheet_xml(
                     iAreaEndRow=iEndRow,
                     iCellXfsCount=iCellXfsCount,
                 )
-    for (_, iSubtotalRow, _, iQuantityStartColumn), listAreaRows in zip(
+    for (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn), listAreaRows in zip(
         tupleSubtotalRanges, tupleAreaRows
     ):
+        bytesWorksheet = set_cell_value_in_worksheet_xml(
+            bytesWorksheet,
+            get_column_letter(iLabelColumn) + str(iSubtotalRow),
+            "小計",
+            bNumeric=False,
+            iAreaStartRow=iSubtotalRow,
+            iAreaEndRow=iSubtotalRow,
+            iCellXfsCount=iCellXfsCount,
+        )
         for iOffset in range(7):
             objSubtotal = sum(
                 Decimal(listAreaRow[iOffset + 2] or "0")
