@@ -2270,6 +2270,7 @@ def build_step0004_rows(
     for (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn), listAreaRows in zip(
         tupleSubtotalRanges, tupleAreaRows
     ):
+        listOutputRows[iSubtotalRow - 1][iLabelColumn - 2] = ""
         listOutputRows[iSubtotalRow - 1][iLabelColumn - 1] = "小計"
         for iOffset in range(7):
             objSubtotal = sum(
@@ -2294,6 +2295,11 @@ def validate_step0004_subtotals(
         (pszArea, iStartRow, iEndRow, _, _),
         (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn),
     ) in zip(tupleAreaRanges, tupleSubtotalRanges):
+        if listRows[iSubtotalRow - 1][iLabelColumn - 2].strip():
+            raise ValueError(
+                "step0004の小計ラベル移動元が空欄ではありません。エリア = "
+                + pszArea
+            )
         if listRows[iSubtotalRow - 1][iLabelColumn - 1].strip() != "小計":
             raise ValueError(
                 "step0004の小計ラベルが正しくありません。エリア = " + pszArea
@@ -2785,6 +2791,15 @@ def update_step0004_cells_in_worksheet_xml(
     for (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn), listAreaRows in zip(
         tupleSubtotalRanges, tupleAreaRows
     ):
+        bytesWorksheet = set_cell_value_in_worksheet_xml(
+            bytesWorksheet,
+            get_column_letter(iLabelColumn - 1) + str(iSubtotalRow),
+            "",
+            bNumeric=False,
+            iAreaStartRow=iSubtotalRow,
+            iAreaEndRow=iSubtotalRow,
+            iCellXfsCount=iCellXfsCount,
+        )
         bytesWorksheet = set_cell_value_in_worksheet_xml(
             bytesWorksheet,
             get_column_letter(iLabelColumn) + str(iSubtotalRow),
