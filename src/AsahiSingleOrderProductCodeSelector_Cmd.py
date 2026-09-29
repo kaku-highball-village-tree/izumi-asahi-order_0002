@@ -108,9 +108,9 @@ STEP0004_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
     ("四国", 13, 43, 20, 28),
 )
 STEP0004_SUBTOTAL_RANGES: tuple[tuple[str, int, int, int], ...] = (
-    ("広島", 8, 2, 4),
-    ("岡山", 8, 11, 13),
-    ("四国", 8, 20, 22),
+    ("広島", 8, 3, 4),
+    ("岡山", 8, 12, 13),
+    ("四国", 8, 21, 22),
 )
 STEP0004_ROLE_COLUMNS: tuple[tuple[int, int, int], ...] = tuple(
     tuple(iStartColumn + iOffset for _, _, _, iStartColumn, _ in STEP0004_AREA_RANGES)
