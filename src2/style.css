@@ -61,3 +61,27 @@ img { max-width: 100%; height: auto; }
 .info-page { width: min(100% - 2rem, 70rem); margin: 1.25rem auto; }
 .info-title { margin-top: 0; text-align: center; }
 .info-page table { max-width: 100%; }
+
+.juku-title { margin-top: 0; }
+.juku-title img { margin-right: .5rem; vertical-align: middle; }
+.affiliate-banner, .centered { text-align: center; }
+.intro-image { float: right; margin: 1rem; }
+.page-toc { margin-block: 1rem; border-block: 1px solid currentcolor; padding-block: 1rem; }
+.page-toc h3 { margin-top: 0; color: #ff7e00; }
+.page-toc ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem 1rem; margin: 0; padding: 0; list-style: none; }
+.page-toc li::before { content: "●"; color: #0000ff; margin-right: .25rem; }
+.juku-page h3 { color: #ff7e00; }
+.juku-page .section-marker { color: green; }
+.juku-page .accent-text { color: #ff7e00; }
+.juku-page .legacy-blue { color: #0000ff; }
+.table-scroll { max-width: 100%; overflow-x: auto; }
+.school-list { width: 100%; min-width: 48rem; border-collapse: collapse; }
+.school-list th, .school-list td { border: 1px solid currentcolor; padding: .25rem .5rem; vertical-align: top; }
+.school-list th, .school-list td:first-child, .school-list td:last-child { text-align: center; }
+.notice { margin-top: 1rem; }
+@media (max-width: 768px) {
+  .intro-image { float: none; display: block; margin: 1rem auto; }
+}
+@media (max-width: 480px) {
+  .page-toc ul { grid-template-columns: 1fr; }
+}
