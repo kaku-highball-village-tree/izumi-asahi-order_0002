@@ -91,26 +91,31 @@ FRESH_FISH_SUMMARY_CELLS: tuple[tuple[int, int], ...] = (
     (60, 4),
 )
 WEEKLY_SHEET_NAME: str = "センター週間"
-WEEKLY_TSV_MAX_ROW: int = 43
+WEEKLY_TSV_MAX_ROW: int = 44
 WEEKLY_TSV_MAX_COLUMN: int = 28
 WEEKLY_TSV_RANGE: str = (
     "A1:" + get_column_letter(WEEKLY_TSV_MAX_COLUMN) + str(WEEKLY_TSV_MAX_ROW)
 )
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
 AREA_NAMES: tuple[str, str, str] = ("広島", "岡山", "四国／岡山")
-SHIPMENT_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((9, 4), (9, 13), (9, 22))
-DELIVERY_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((11, 4), (11, 13), (11, 22))
-SHIPMENT_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((10, 4), (10, 13), (10, 22))
-DELIVERY_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((12, 4), (12, 13), (12, 22))
+SHIPMENT_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((10, 4), (10, 13), (10, 22))
+DELIVERY_DATE_ROW_RANGES: tuple[tuple[int, int], ...] = ((12, 4), (12, 13), (12, 22))
+SHIPMENT_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((11, 4), (11, 13), (11, 22))
+DELIVERY_WEEKDAY_ROW_RANGES: tuple[tuple[int, int], ...] = ((13, 4), (13, 13), (13, 22))
 STEP0004_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
-    ("広島", 13, 43, 2, 10),
-    ("岡山", 13, 43, 11, 19),
-    ("四国", 13, 43, 20, 28),
+    ("広島", 14, 44, 2, 10),
+    ("岡山", 14, 44, 11, 19),
+    ("四国", 14, 44, 20, 28),
 )
-STEP0004_SUBTOTAL_RANGES: tuple[tuple[str, int, int, int], ...] = (
+STEP0004_TOTAL_RANGES: tuple[tuple[str, int, int, int], ...] = (
     ("広島", 8, 3, 4),
     ("岡山", 8, 12, 13),
     ("四国", 8, 21, 22),
+)
+STEP0004_SUBTOTAL_RANGES: tuple[tuple[str, int, int, int], ...] = (
+    ("広島", 9, 3, 4),
+    ("岡山", 9, 12, 13),
+    ("四国", 9, 21, 22),
 )
 STEP0004_ROLE_COLUMNS: tuple[tuple[int, int, int], ...] = tuple(
     tuple(iStartColumn + iOffset for _, _, _, iStartColumn, _ in STEP0004_AREA_RANGES)
@@ -1394,14 +1399,19 @@ def validate_weekly_template(
 
 
 def validate_standard_weekly_subtotal_template(objWorksheet: Worksheet) -> None:
-    """標準3列版の小計用8行目がすべて空欄であることを確認します。"""
-    for iColumn in range(1, WEEKLY_TSV_MAX_COLUMN + 1):
-        if objWorksheet.cell(8, iColumn).value is not None:
-            raise ValueError(
-                "標準3列版週間予定表の小計用8行目が空欄ではありません。セル = "
-                + get_column_letter(iColumn)
-                + "8"
-            )
+    """標準3列版の合計・小計用8～9行目が空欄であることを確認します。"""
+    for iRow, pszName in ((8, "合計"), (9, "小計")):
+        for iColumn in range(1, WEEKLY_TSV_MAX_COLUMN + 1):
+            if objWorksheet.cell(iRow, iColumn).value is not None:
+                raise ValueError(
+                    "標準3列版週間予定表の"
+                    + pszName
+                    + "用"
+                    + str(iRow)
+                    + "行目が空欄ではありません。セル = "
+                    + get_column_letter(iColumn)
+                    + str(iRow)
+                )
 
 
 def build_weekly_tsv_rows(
@@ -2247,6 +2257,7 @@ def build_step0004_rows(
     tupleAreaRanges: tuple[tuple[str, int, int, int, int], ...] = STEP0004_AREA_RANGES,
     iMaximumStores: int = STEP0004_MAX_STORES_PER_AREA,
     tupleSubtotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_SUBTOTAL_RANGES,
+    tupleTotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_TOTAL_RANGES,
 ) -> list[list[str]]:
     """3エリアの31行×9列を空欄化し、エリア別TSVを上から転記します。"""
     listOutputRows: list[list[str]] = [listRow.copy() for listRow in listStep0003Rows]
@@ -2282,6 +2293,24 @@ def build_step0004_rows(
                 if objSubtotal == objSubtotal.to_integral_value()
                 else str(objSubtotal)
             )
+    for (
+        (_, iTotalRow, iLabelColumn, iValueColumn),
+        (_, _, _, iAreaStartColumn, iAreaEndColumn),
+        listAreaRows,
+    ) in zip(tupleTotalRanges, tupleAreaRanges, tupleAreaRows):
+        for iColumn in range(iAreaStartColumn, iAreaEndColumn + 1):
+            listOutputRows[iTotalRow - 1][iColumn - 1] = ""
+        listOutputRows[iTotalRow - 1][iLabelColumn - 1] = "合計"
+        objTotal = sum(
+            Decimal(pszQuantity or "0")
+            for listAreaRow in listAreaRows
+            for pszQuantity in listAreaRow[2:9]
+        )
+        listOutputRows[iTotalRow - 1][iValueColumn - 1] = (
+            str(int(objTotal))
+            if objTotal == objTotal.to_integral_value()
+            else str(objTotal)
+        )
     return listOutputRows
 
 
@@ -2289,8 +2318,9 @@ def validate_step0004_subtotals(
     listRows: list[list[str]],
     tupleAreaRanges: tuple[tuple[str, int, int, int, int], ...],
     tupleSubtotalRanges: tuple[tuple[str, int, int, int], ...],
+    tupleTotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_TOTAL_RANGES,
 ) -> None:
-    """標準3列版の小計が店舗明細の曜日別数量合計と一致するか確認します。"""
+    """標準3列版の合計・小計が店舗明細の数量合計と一致するか確認します。"""
     for (
         (pszArea, iStartRow, iEndRow, _, _),
         (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn),
@@ -2317,6 +2347,42 @@ def validate_step0004_subtotals(
                     + get_column_letter(iColumn)
                     + str(iSubtotalRow)
                 )
+    for (
+        (pszArea, _, _, iAreaStartColumn, iAreaEndColumn),
+        (_, iSubtotalRow, _, iQuantityStartColumn),
+        (_, iTotalRow, iLabelColumn, iValueColumn),
+    ) in zip(tupleAreaRanges, tupleSubtotalRanges, tupleTotalRanges):
+        if listRows[iTotalRow - 1][iLabelColumn - 2].strip():
+            raise ValueError(
+                "step0004の合計ラベル左側が空欄ではありません。エリア = "
+                + pszArea
+            )
+        if listRows[iTotalRow - 1][iLabelColumn - 1].strip() != "合計":
+            raise ValueError(
+                "step0004の合計ラベルが正しくありません。エリア = " + pszArea
+            )
+        for iColumn in range(iAreaStartColumn, iAreaEndColumn + 1):
+            if iColumn in (iLabelColumn, iValueColumn):
+                continue
+            if listRows[iTotalRow - 1][iColumn - 1].strip():
+                raise ValueError(
+                    "step0004の合計行に不要な値があります。セル = "
+                    + get_column_letter(iColumn)
+                    + str(iTotalRow)
+                )
+        objExpected = sum(
+            Decimal(
+                listRows[iSubtotalRow - 1][iQuantityStartColumn - 1 + iOffset] or "0"
+            )
+            for iOffset in range(7)
+        )
+        objActual = Decimal(listRows[iTotalRow - 1][iValueColumn - 1])
+        if objActual != objExpected:
+            raise ValueError(
+                "step0004の合計が曜日別小計の合計と一致しません。セル = "
+                + get_column_letter(iValueColumn)
+                + str(iTotalRow)
+            )
 
 
 def set_cell_value_in_worksheet_xml(
@@ -2764,6 +2830,7 @@ def update_step0004_cells_in_worksheet_xml(
     tupleAreaRanges: tuple[tuple[str, int, int, int, int], ...] = STEP0004_AREA_RANGES,
     iCellXfsCount: int = 1,
     tupleSubtotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_SUBTOTAL_RANGES,
+    tupleTotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_TOTAL_RANGES,
 ) -> bytes:
     """3エリアの店舗コード・略称・月～日数量をセル値だけ更新します。"""
     for (
@@ -2829,6 +2896,49 @@ def update_step0004_cells_in_worksheet_xml(
                 iAreaEndRow=iSubtotalRow,
                 iCellXfsCount=iCellXfsCount,
             )
+    for (
+        (_, iTotalRow, iLabelColumn, iValueColumn),
+        (_, _, _, iAreaStartColumn, iAreaEndColumn),
+        listAreaRows,
+    ) in zip(tupleTotalRanges, tupleAreaRanges, tupleAreaRows):
+        for iColumn in range(iAreaStartColumn, iAreaEndColumn + 1):
+            bytesWorksheet = set_cell_value_in_worksheet_xml(
+                bytesWorksheet,
+                get_column_letter(iColumn) + str(iTotalRow),
+                "",
+                bNumeric=False,
+                iAreaStartRow=iTotalRow,
+                iAreaEndRow=iTotalRow,
+                iCellXfsCount=iCellXfsCount,
+            )
+        bytesWorksheet = set_cell_value_in_worksheet_xml(
+            bytesWorksheet,
+            get_column_letter(iLabelColumn) + str(iTotalRow),
+            "合計",
+            bNumeric=False,
+            iAreaStartRow=iTotalRow,
+            iAreaEndRow=iTotalRow,
+            iCellXfsCount=iCellXfsCount,
+        )
+        objTotal = sum(
+            Decimal(pszQuantity or "0")
+            for listAreaRow in listAreaRows
+            for pszQuantity in listAreaRow[2:9]
+        )
+        pszTotal = (
+            str(int(objTotal))
+            if objTotal == objTotal.to_integral_value()
+            else str(objTotal)
+        )
+        bytesWorksheet = set_cell_value_in_worksheet_xml(
+            bytesWorksheet,
+            get_column_letter(iValueColumn) + str(iTotalRow),
+            pszTotal,
+            bNumeric=True,
+            iAreaStartRow=iTotalRow,
+            iAreaEndRow=iTotalRow,
+            iCellXfsCount=iCellXfsCount,
+        )
     return bytesWorksheet
 
 
@@ -2838,6 +2948,7 @@ def save_step0004_xlsx(
     tupleAreaRows: tuple[list[list[str]], ...],
     tupleAreaRanges: tuple[tuple[str, int, int, int, int], ...] = STEP0004_AREA_RANGES,
     tupleSubtotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_SUBTOTAL_RANGES,
+    tupleTotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_TOTAL_RANGES,
 ) -> str:
     """step0003の描画・書式を保ち、3エリアのセル値だけ更新します。"""
     with zipfile.ZipFile(objStep0003Path, mode="r") as objSourceArchive:
@@ -2850,6 +2961,7 @@ def save_step0004_xlsx(
             tupleAreaRanges,
             iCellXfsCount,
             tupleSubtotalRanges,
+            tupleTotalRanges,
         )
         with zipfile.ZipFile(objStep0004Path, mode="w") as objOutputArchive:
             objOutputArchive.comment = objSourceArchive.comment
@@ -2870,6 +2982,7 @@ def validate_step0004_xlsx_parts(
     tupleAreaRows: tuple[list[list[str]], ...],
     tupleAreaRanges: tuple[tuple[str, int, int, int, int], ...] = STEP0004_AREA_RANGES,
     tupleSubtotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_SUBTOTAL_RANGES,
+    tupleTotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_TOTAL_RANGES,
 ) -> None:
     """対象セル値以外のXLSX内部データが変わっていないことを確認します。"""
     with zipfile.ZipFile(objStep0003Path, mode="r") as objSourceArchive:
@@ -2892,6 +3005,7 @@ def validate_step0004_xlsx_parts(
                         tupleAreaRanges,
                         iCellXfsCount,
                         tupleSubtotalRanges,
+                        tupleTotalRanges,
                     )
                     if pszMemberName == pszWorksheetPart
                     else bytesSource
@@ -2943,6 +3057,7 @@ def create_step0004_outputs(
     tupleShipmentDateRanges: tuple[tuple[int, int], ...] = SHIPMENT_DATE_ROW_RANGES,
     tupleDeliveryDateRanges: tuple[tuple[int, int], ...] = DELIVERY_DATE_ROW_RANGES,
     tupleSubtotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_SUBTOTAL_RANGES,
+    tupleTotalRanges: tuple[tuple[str, int, int, int], ...] = STEP0004_TOTAL_RANGES,
 ) -> tuple[Path, Path]:
     """step0003ペアと3つのエリア別TSVからstep0004を作ります。"""
     if not objStep0003ExcelPath.is_file() or not objStep0003TsvPath.is_file():
@@ -2975,10 +3090,14 @@ def create_step0004_outputs(
         tupleAreaRanges,
         iMaximumStores,
         tupleSubtotalRanges,
+        tupleTotalRanges,
     )
     if tupleSubtotalRanges:
         validate_step0004_subtotals(
-            listStep0004Rows, tupleAreaRanges, tupleSubtotalRanges
+            listStep0004Rows,
+            tupleAreaRanges,
+            tupleSubtotalRanges,
+            tupleTotalRanges,
         )
     objTemporaryExcelPath: Path = create_temporary_path(objStep0004ExcelPath)
     objTemporaryTsvPath: Path = create_temporary_path(objStep0004TsvPath)
@@ -2989,6 +3108,7 @@ def create_step0004_outputs(
             tupleAreaRows,
             tupleAreaRanges,
             tupleSubtotalRanges,
+            tupleTotalRanges,
         )
         save_tsv_table(objTemporaryTsvPath, listStep0004Rows)
         validate_step0004_outputs(
@@ -3007,6 +3127,7 @@ def create_step0004_outputs(
             tupleAreaRows,
             tupleAreaRanges,
             tupleSubtotalRanges,
+            tupleTotalRanges,
         )
         replace_output_pair(
             objTemporaryExcelPath,
@@ -3132,10 +3253,10 @@ def validate_standard_step0005_input_dates(
     listDeliveryGroups: list[list[date]] = []
     for iStartColumn in (4, 13, 22):
         tupleActualShipmentWeekdays = tuple(
-            listRows[9][iStartColumn - 1 + iOffset].strip() for iOffset in range(7)
+            listRows[10][iStartColumn - 1 + iOffset].strip() for iOffset in range(7)
         )
         tupleActualDeliveryWeekdays = tuple(
-            listRows[11][iStartColumn - 1 + iOffset].strip() for iOffset in range(7)
+            listRows[12][iStartColumn - 1 + iOffset].strip() for iOffset in range(7)
         )
         if tupleActualShipmentWeekdays != tupleShipmentWeekdays:
             raise ValueError("通常版step0004 TSVの出荷曜日が仕様どおりではありません。")
@@ -3143,19 +3264,19 @@ def validate_standard_step0005_input_dates(
             raise ValueError("通常版step0004 TSVの納品曜日が仕様どおりではありません。")
         listShipmentDates = [
             parse_step0005_date(
-                listRows[8][iStartColumn - 1 + iOffset],
+                listRows[9][iStartColumn - 1 + iOffset],
                 "通常版step0004 TSV "
                 + get_column_letter(iStartColumn + iOffset)
-                + "9",
+                + "10",
             )
             for iOffset in range(7)
         ]
         listDeliveryDates = [
             parse_step0005_date(
-                listRows[10][iStartColumn - 1 + iOffset],
+                listRows[11][iStartColumn - 1 + iOffset],
                 "通常版step0004 TSV "
                 + get_column_letter(iStartColumn + iOffset)
-                + "11",
+                + "12",
             )
             for iOffset in range(7)
         ]
@@ -3240,7 +3361,7 @@ def validate_standard_step0005_quantities(
         ("岡山", 11, 13),
         ("四国", 20, 22),
     ):
-        for iRow in range(13, 44):
+        for iRow in range(14, 45):
             pszStoreCode = listRows[iRow - 1][iStoreColumn - 1].strip()
             pszStoreName = listRows[iRow - 1][iStoreColumn].strip()
             for iOffset, pszWeekday in enumerate(WEEKDAYS):
@@ -3330,7 +3451,7 @@ def get_standard_step0005_order_counts(
 ) -> list[tuple[int, int | float]]:
     """通常3エリア版から月～日の広島の（注文件数、注文数）を返します。"""
     iHiroshimaStoreCount: int = sum(
-        bool(listRows[iRow - 1][1].strip()) for iRow in range(13, 44)
+        bool(listRows[iRow - 1][1].strip()) for iRow in range(14, 45)
     )
     if iHiroshimaStoreCount > STEP0004_MAX_STORES_PER_AREA:
         raise ValueError(
@@ -3340,7 +3461,7 @@ def get_standard_step0005_order_counts(
     listCounts: list[tuple[int, int | float]] = []
     for iOffset in range(7):
         listQuantities: list[int | float] = []
-        for iRow in range(13, 44):
+        for iRow in range(14, 45):
             if not listRows[iRow - 1][1].strip():
                 continue
             pszQuantity = listRows[iRow - 1][3 + iOffset].strip()
@@ -4442,6 +4563,7 @@ def process_input_file(
             HIROSHIMA_DATE_ROW_RANGES,
             HIROSHIMA_DELIVERY_DATE_ROW_RANGES,
             (),
+            (),
         )
         objO3x, objO3t = create_step0003_outputs(
             objStep0002ExcelPath, objStep0002TsvPath,
@@ -4462,6 +4584,7 @@ def process_input_file(
             HIROSHIMA_TSV_MAX_ROW,
             HIROSHIMA_DATE_ROW_RANGES,
             HIROSHIMA_DELIVERY_DATE_ROW_RANGES,
+            (),
             (),
         )
         try:
