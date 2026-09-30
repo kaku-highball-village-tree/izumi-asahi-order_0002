@@ -39,9 +39,12 @@ img { max-width: 100%; height: auto; }
 .hero { text-align: center; }
 .hero img { display: inline-block; }
 .ads { margin-top: 1.25rem; }
-.ad-scroll { max-width: 100%; overflow-x: auto; text-align: center; }
+.ad-scroll { max-width: 100%; overflow-x: auto; overflow-y: hidden; text-align: left; }
 .ad-scroll + .ad-scroll { margin-top: 1rem; }
 .ad-scroll iframe { display: inline-block; border: 0; max-width: none; }
+@media (min-width: 1040px) {
+  .ad-scroll { overflow: hidden; text-align: center; }
+}
 .feedback { margin-top: 1.5rem; text-align: center; }
 .feedback span { color: #f00; }
 .site-footer { padding: 1rem 0 2rem; text-align: center; }
@@ -54,3 +57,7 @@ img { max-width: 100%; height: auto; }
   .site-header, .layout, .site-footer, .standalone-home, .contents-page { width: min(100% - 1rem, 1180px); }
   .site-nav ul { grid-template-columns: 1fr; }
 }
+
+.info-page { width: min(100% - 2rem, 70rem); margin: 1.25rem auto; }
+.info-title { margin-top: 0; text-align: center; }
+.info-page table { max-width: 100%; }
