@@ -54,3 +54,7 @@ img { max-width: 100%; height: auto; }
   .site-header, .layout, .site-footer, .standalone-home, .contents-page { width: min(100% - 1rem, 1180px); }
   .site-nav ul { grid-template-columns: 1fr; }
 }
+
+.info-page { width: min(100% - 2rem, 70rem); margin: 1.25rem auto; }
+.info-title { margin-top: 0; text-align: center; }
+.info-page table { max-width: 100%; }
