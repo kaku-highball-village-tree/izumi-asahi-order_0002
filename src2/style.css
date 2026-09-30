@@ -97,3 +97,13 @@ img { max-width: 100%; height: auto; }
 @media (max-width: 480px) {
   .page-toc ul { grid-template-columns: 1fr; }
 }
+
+.highschool-page { overflow-wrap: anywhere; }
+.highschool-title { margin-top: 0; }
+.highschool-title-icon { margin-right: .5rem; vertical-align: middle; }
+.highschool-page .section-marker { color: green; }
+.highschool-toc { margin-block: 1rem; }
+.highschool-toc ul { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 0; padding: 0; list-style: none; }
+.highschool-page .school-number { font-weight: 700; }
+.highschool-page .school-name { font-size: 1.17em; font-weight: 700; }
+.highschool-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
