@@ -79,8 +79,20 @@ img { max-width: 100%; height: auto; }
 .school-list th, .school-list td { border: 1px solid currentcolor; padding: .25rem .5rem; vertical-align: top; }
 .school-list th, .school-list td:first-child, .school-list td:last-child { text-align: center; }
 .notice { margin-top: 1rem; }
+.problems-page { overflow-wrap: anywhere; }
+.problems-title { margin-top: 0; }
+.problems-title-icon { margin-right: .5rem; vertical-align: middle; }
+.problems-title-decoration { float: right; margin-left: 1rem; }
+.problems-lead-image { float: left; margin: 1rem; }
+.problems-page .section-marker { color: green; }
+.problems-page .accent-text { color: teal; }
+.problems-page .toc-note { font-size: .875rem; }
+.problems-page .article-date { text-align: right; }
+.problems-page .comment { margin-block: 1rem; border-left: .25rem solid #b8b8d8; padding-left: 1rem; }
+.problems-page .page-actions { margin-top: 1.5rem; }
 @media (max-width: 768px) {
   .intro-image { float: none; display: block; margin: 1rem auto; }
+  .problems-title-decoration, .problems-lead-image { float: none; display: block; margin: 1rem auto; }
 }
 @media (max-width: 480px) {
   .page-toc ul { grid-template-columns: 1fr; }
