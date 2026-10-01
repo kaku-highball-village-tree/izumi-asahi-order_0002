@@ -14,7 +14,7 @@ img { max-width: 100%; height: auto; }
   width: min(100% - 2rem, 1180px);
   margin-inline: auto;
 }
-.site-header h1 { margin: 1rem 0 .5rem; font-size: clamp(1.4rem, 3vw, 2rem); text-align: center; }
+.site-header h1, .site-header .site-name { margin: 1rem 0 .5rem; font-size: clamp(1.4rem, 3vw, 2rem); font-weight: 700; text-align: center; }
 .marquee-box { overflow: hidden; border-block: 1px solid #b8b8d8; padding: .4rem 0; white-space: nowrap; }
 .marquee-text { display: inline-block; min-width: max-content; margin: 0; padding-left: 100%; animation: marquee 24s linear infinite; }
 @keyframes marquee { to { transform: translateX(-100%); } }
@@ -119,4 +119,43 @@ img { max-width: 100%; height: auto; }
 .instructor-section { margin-top: 1.5rem; }
 @media (max-width: 480px) {
   .service-price { display: block; margin-inline-start: 0; }
+}
+
+.bosyuu-page { overflow-wrap: anywhere; }
+.bosyuu-title { margin-top: 0; }
+.bosyuu-title-icon { margin-right: .5rem; vertical-align: middle; }
+.bosyuu-lead p { font-size: 1.17rem; }
+.bosyuu-mobile-contact { text-align: center; }
+.bosyuu-mobile-number { font-size: clamp(1.5rem, 4vw, 2rem); }
+.bosyuu-date { text-align: right; }
+.download-section::after { display: block; clear: both; content: ""; }
+.download-image { float: right; margin: 1rem; }
+.download-format { font-size: 1rem; }
+.encouragement { display: flex; align-items: center; gap: .75rem; margin-block: 1rem; }
+.encouragement p { margin: 0; font-size: 1.5rem; font-weight: 700; }
+.course-table { width: 100%; min-width: 48rem; border-collapse: collapse; font-weight: 700; }
+.course-table th, .course-table td { border: 1px solid #111; padding: .5rem; vertical-align: middle; }
+.course-table thead th { background: #00ff00; text-align: center; font-size: 1.17rem; }
+.course-table tbody th { width: 29%; background: #ffff00; text-align: left; }
+.course-table tbody td:nth-child(2) { width: 17%; }
+.course-table tbody td:nth-child(3) { width: 35%; }
+.course-table tbody td:nth-child(4) { width: 19%; }
+.course-name { font-size: 1.5rem; }
+.course-note { font-size: .875rem; }
+.map-section { margin-block: 1.5rem; }
+.results-title { color: green; text-align: center; }
+.exam-results { margin-block: .5rem 0; padding-left: 1.5rem; }
+.contact-section { text-align: center; }
+.contact-section h2 { font-size: 1rem; }
+.contact-section p { font-weight: 700; }
+.contact-phone-number { font-size: clamp(1.75rem, 5vw, 3rem); }
+.contact-detail { font-size: 1rem; }
+.contact-destination { color: #bc4d00; font-size: 1.5rem; }
+.bosyuu-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
+@media (max-width: 768px) {
+  .download-image { float: none; display: block; margin: 1rem auto; }
+}
+@media (max-width: 480px) {
+  .encouragement { align-items: flex-start; }
+  .encouragement p, .contact-destination { font-size: 1.17rem; }
 }
