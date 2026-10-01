@@ -159,3 +159,20 @@ img { max-width: 100%; height: auto; }
   .encouragement { align-items: flex-start; }
   .encouragement p, .contact-destination { font-size: 1.17rem; }
 }
+
+.consultation-page { overflow-wrap: anywhere; }
+.consultation-title { margin-top: 0; }
+.consultation-title-icon { margin-right: .5rem; vertical-align: middle; }
+.consultation-free { font-size: 1.25em; }
+.consultation-intro { margin-block: 1rem; }
+.consultation-instructor { color: #00ff00; font-size: clamp(1.25rem, 3vw, 2rem); }
+.consultation-intro-text { color: #0000cc; font-size: clamp(1.1rem, 2.5vw, 1.5rem); }
+.consultation-emphasis { color: #d000a8; }
+.consultation-phone { font-size: clamp(1.35rem, 3vw, 2rem); }
+.consultation-image { float: right; margin: 0 0 1rem 1rem; }
+.consultation-page .page-toc-title { margin-top: 0; color: #ff00ff; }
+.consultation-page ul ul { list-style-type: circle; }
+.consultation-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
+@media (max-width: 768px) {
+  .consultation-image { float: none; display: block; margin: 1rem auto; }
+}
