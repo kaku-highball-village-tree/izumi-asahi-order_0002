@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>出題教科・科目等</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 32px 20px;
+      font-family:
+        "Yu Mincho",
+        "Hiragino Mincho ProN",
+        "Hiragino Mincho Pro",
+        "MS PMincho",
+        serif;
+      color: #222;
+      background: #fff;
+    }
+
+    .page {
+      max-width: 1550px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 44px;
+      text-align: center;
+      font-family:
+        "Yu Gothic",
+        "Hiragino Kaku Gothic ProN",
+        Meiryo,
+        sans-serif;
+      font-size: 44px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+
+    .exam-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .exam-table th,
+    .exam-table td {
+      border: 2px solid #333;
+      vertical-align: middle;
+    }
+
+    .exam-table thead th {
+      background: #d9d9db;
+      font-family:
+        "Yu Gothic",
+        "Hiragino Kaku Gothic ProN",
+        Meiryo,
+        sans-serif;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    /* 列幅 */
+    .col-subject {
+      width: 64px;
+    }
+
+    .col-group {
+      width: 44px;
+    }
+
+    .col-course {
+      width: 24%;
+    }
+
+    .col-method {
+      width: 52%;
+    }
+
+    .col-time {
+      width: 17%;
+    }
+
+    /* 縦書き */
+    .vertical {
+      writing-mode: vertical-rl;
+      text-orientation: upright;
+      letter-spacing: 0.08em;
+      font-size: 28px;
+      line-height: 1.15;
+      padding: 14px 6px;
+    }
+
+    .course-heading,
+    .time-heading {
+      font-size: 28px;
+      padding: 20px 12px;
+    }
+
+    .method-heading {
+      padding: 8px 10px;
+      line-height: 1.4;
+    }
+
+    .method-title {
+      font-size: 27px;
+      font-weight: 700;
+    }
+
+    .method-subtitle {
+      font-size: 26px;
+      font-weight: 700;
+    }
+
+    .method-note {
+      margin-top: 4px;
+      text-align: left;
+      font-family:
+        "Yu Gothic",
+        "Hiragino Kaku Gothic ProN",
+        Meiryo,
+        sans-serif;
+      font-size: 22px;
+      font-weight: 400;
+      line-height: 1.4;
+    }
+
+    .exam-table tbody td {
+      height: 78px;
+      font-size: 28px;
+    }
+
+    .subject-cell {
+      text-align: center;
+      font-family:
+        "Yu Gothic",
+        "Hiragino Kaku Gothic ProN",
+        Meiryo,
+        sans-serif;
+      font-weight: 700;
+    }
+
+    .subject-cell span {
+      display: inline-block;
+      line-height: 1.25;
+    }
+
+    .group-cell {
+      text-align: center;
+    }
+
+    .course-cell {
+      padding: 10px 18px;
+      font-size: 30px;
+    }
+
+    .method-cell {
+      padding: 10px 18px;
+    }
+
+    .time-cell {
+      padding: 10px 20px;
+      white-space: nowrap;
+      font-size: 28px;
+    }
+
+    @media (max-width: 900px) {
+      .table-scroll {
+        overflow-x: auto;
+      }
+
+      .exam-table {
+        min-width: 1100px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="page">
+
+  <h1>2　出題教科・科目等</h1>
+
+  <div class="table-scroll">
+
+    <table class="exam-table">
+
+      <colgroup>
+        <col class="col-subject">
+        <col class="col-group">
+        <col class="col-course">
+        <col class="col-method">
+        <col class="col-time">
+      </colgroup>
+
+      <thead>
+        <tr>
+
+          <th class="vertical">
+            教科
+          </th>
+
+          <th class="vertical">
+            グループ
+          </th>
+
+          <th class="course-heading">
+            出　題　科　目
+          </th>
+
+          <th class="method-heading">
+            <div class="method-title">
+              出題方法
+            </div>
+
+            <div class="method-subtitle">
+              （出題範囲、出題科目選択の方法等）
+            </div>
+
+            <div class="method-note">
+              出題範囲について特記がない場合、出題科目名に含まれる学習指導要領の科目の内容を総合した出題範囲とする。
+            </div>
+          </th>
+
+          <th class="time-heading">
+            試験時間（配点）
+          </th>
+
+        </tr>
+      </thead>
+
+      <tbody>
+
+        <tr>
+
+          <td class="subject-cell">
+            <span>情<br>報</span>
+          </td>
+
+          <td class="group-cell">
+          </td>
+
+          <td class="course-cell">
+            『情 報 Ⅰ』
+          </td>
+
+          <td class="method-cell">
+          </td>
+
+          <td class="time-cell">
+            60 分（100 点）
+          </td>
+
+        </tr>
+
+      </tbody>
+
+    </table>
+
+  </div>
+
+</div>
+
+</body>
+</html>
