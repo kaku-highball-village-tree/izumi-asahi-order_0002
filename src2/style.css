@@ -160,6 +160,36 @@ img { max-width: 100%; height: auto; }
   .encouragement p, .contact-destination { font-size: 1.17rem; }
 }
 
+.information-recruitment-guide { margin-block: 1.5rem; border: 2px solid #6b5cad; border-radius: .5rem; background: rgb(245 242 255 / 90%); padding: 1rem; }
+.information-recruitment-guide h2 { margin-top: 0; font-size: clamp(1.2rem, 2.5vw, 1.5rem); }
+.information-recruitment-guide p:last-child { margin-bottom: 0; }
+.information-recruitment-link { display: inline-block; font-weight: 700; }
+
+.information-recruitment-page { overflow-wrap: anywhere; }
+.information-recruitment-title { margin-top: 0; font-size: clamp(1.5rem, 3vw, 2rem); }
+.information-course-section, .information-location, .information-contact { margin-block: 1.75rem; }
+.information-course-section h2, .information-location h2, .information-contact h2 { border-bottom: 2px solid #6b5cad; padding-bottom: .25rem; font-size: clamp(1.25rem, 2.5vw, 1.6rem); }
+.information-course-subtitle { color: #bc4d00; font-size: 1.17rem; }
+.information-schedule { font-size: clamp(1.2rem, 3vw, 1.5rem); }
+.information-key-message { border-left: .3rem solid #6b5cad; background: rgb(245 242 255 / 80%); padding: .5rem 1rem; }
+.information-key-message p:first-child { margin-top: .5rem; }
+.information-key-message p:last-child { margin-bottom: .5rem; }
+.information-details { margin: 0; border: 1px solid #b8b8d8; }
+.information-details div { display: grid; grid-template-columns: minmax(8rem, 25%) 1fr; }
+.information-details div + div { border-top: 1px solid #b8b8d8; }
+.information-details dt, .information-details dd { margin: 0; padding: .65rem .75rem; }
+.information-details dt { background: rgb(232 232 248 / 90%); font-weight: 700; }
+.information-pending { font-weight: 700; }
+.information-subject-list { padding-left: 1.5rem; }
+.information-note { border-left: .25rem solid #b8b8d8; padding-left: .75rem; font-size: .9rem; }
+.information-contact { text-align: center; }
+.information-contact-phone { font-size: clamp(1.5rem, 4vw, 2rem); font-weight: 700; white-space: nowrap; }
+.information-recruitment-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
+@media (max-width: 480px) {
+  .information-details div { grid-template-columns: 1fr; }
+  .information-details dd { padding-top: .35rem; }
+}
+
 .consultation-page { overflow-wrap: anywhere; }
 .consultation-title { margin-top: 0; }
 .consultation-title-icon { margin-right: .5rem; vertical-align: middle; }
