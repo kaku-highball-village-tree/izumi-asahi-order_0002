@@ -303,3 +303,35 @@ img { max-width: 100%; height: auto; }
   .information-related-link { text-align: left; }
   .information-reason, .information-start-early { padding-left: .75rem; }
 }
+
+.links-page { overflow-wrap: anywhere; }
+.links-title { margin-top: 0; }
+.links-title-icon { margin-right: .5rem; vertical-align: middle; }
+.links-toc h2 { margin-top: 0; color: #ff7e00; font-size: 1.17rem; }
+.links-section { margin-top: 1.5rem; border-top: 1px solid #b8b8d8; padding-top: .5rem; }
+.links-section h2 { color: #bc4d00; font-size: clamp(1.15rem, 2.5vw, 1.4rem); }
+.links-list { padding-left: 1.5rem; }
+.links-list li + li { margin-top: 1rem; }
+.links-list p { margin: .25rem 0 0; }
+.links-daruma { float: right; margin-left: 1rem; }
+.links-empty-section::after { display: block; clear: both; content: ""; }
+.links-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
+
+.privacy-page { overflow-wrap: anywhere; }
+.privacy-header { margin-bottom: 1.5rem; }
+.privacy-site-label { margin-bottom: .25rem; color: #bc4d00; font-weight: 700; }
+.privacy-title { margin-top: 0; color: #0000cc; font-size: clamp(1.5rem, 3.5vw, 2rem); line-height: 1.4; }
+.privacy-lead { border-left: .3rem solid #687fb8; background: #f4f7ff; padding: 1rem; font-weight: 700; }
+.privacy-policy-list { padding-left: 2rem; }
+.privacy-policy-list > li { margin-top: 1.25rem; }
+.privacy-policy-list h2 { margin-bottom: .25rem; font-size: 1.15rem; text-decoration: underline; }
+.privacy-policy-list p { margin-top: .25rem; }
+.privacy-date { text-align: right; }
+.privacy-contact { margin-top: 2rem; border: 2px solid #687fb8; border-radius: .5rem; background: #f4f7ff; padding: 1rem; text-align: center; }
+.privacy-contact h2 { margin-top: 0; }
+.privacy-phone { color: #d000a8; font-size: clamp(1.75rem, 5vw, 2.5rem); font-weight: 700; white-space: nowrap; }
+.privacy-page .affiliate-banner { margin-top: 1.5rem; }
+.privacy-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
+@media (max-width: 480px) {
+  .privacy-policy-list { padding-left: 1.5rem; }
+}
