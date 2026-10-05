@@ -246,3 +246,16 @@ img { max-width: 100%; height: auto; }
   .information-related-link { text-align: left; }
   .information-reason, .information-start-early { padding-left: .75rem; }
 }
+
+.links-page { overflow-wrap: anywhere; }
+.links-title { margin-top: 0; }
+.links-title-icon { margin-right: .5rem; vertical-align: middle; }
+.links-toc h2 { margin-top: 0; color: #ff7e00; font-size: 1.17rem; }
+.links-section { margin-top: 1.5rem; border-top: 1px solid #b8b8d8; padding-top: .5rem; }
+.links-section h2 { color: #bc4d00; font-size: clamp(1.15rem, 2.5vw, 1.4rem); }
+.links-list { padding-left: 1.5rem; }
+.links-list li + li { margin-top: 1rem; }
+.links-list p { margin: .25rem 0 0; }
+.links-daruma { float: right; margin-left: 1rem; }
+.links-empty-section::after { display: block; clear: both; content: ""; }
+.links-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
