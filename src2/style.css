@@ -58,9 +58,34 @@ img { max-width: 100%; height: auto; }
   .site-nav ul { grid-template-columns: 1fr; }
 }
 
-.info-page { width: min(100% - 2rem, 70rem); margin: 1.25rem auto; }
+.info-page { overflow-wrap: anywhere; }
 .info-title { margin-top: 0; text-align: center; }
-.info-page table { max-width: 100%; }
+.info-section { margin-top: 2rem; border-top: 1px solid #b8b8d8; padding-top: 1rem; }
+.info-section-title { margin-top: 0; font-size: clamp(1.2rem, 2.5vw, 1.5rem); }
+.info-emphasis { font-size: 1.25em; }
+.info-event-image, .info-calendar-link, .info-exam-image { text-align: center; }
+.info-calendar-link { font-size: 1.15rem; font-weight: 700; }
+.info-calendar-label { font-size: .9em; }
+.info-notice-list, .info-contact-list, .info-exam-list { padding-left: 1.5rem; }
+.info-notice-list li + li, .info-contact-list li + li, .info-exam-list li + li { margin-top: .75rem; }
+.info-guideline { font-weight: 700; }
+.info-contact-list li::marker { color: #008b8b; }
+.info-exam-date { font-size: clamp(1.2rem, 3vw, 1.65rem); }
+.info-table-scroll { max-width: 100%; overflow-x: auto; }
+.info-table-scroll:focus-visible { outline: 3px solid #ff8c00; outline-offset: 3px; }
+.info-fee-table { width: 100%; min-width: 36rem; border-collapse: collapse; }
+.info-fee-table caption { margin-bottom: .5rem; font-size: 1.15rem; font-weight: 700; text-align: left; }
+.info-fee-table th, .info-fee-table td { border: 1px solid #555; padding: .5rem .75rem; }
+.info-fee-table thead th { background: #e8e8f8; text-align: center; }
+.info-fee-table tbody th { text-align: left; }
+.info-fee-table td { text-align: center; white-space: nowrap; }
+.info-fee-table small { font-weight: 400; }
+.info-fee-note { margin-top: .75rem; }
+.info-encouragement { margin: 2rem 0; border-left: .3rem solid #6b5cad; background: rgb(245 242 255 / 80%); padding: .5rem 1rem; }
+.info-encouragement p { margin-block: .5rem; }
+.info-potential-message { font-size: clamp(1.15rem, 2.5vw, 1.4rem); }
+.info-potential-keyword { color: #d00000; font-size: 1.25em; }
+.info-page .page-actions { display: flex; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
 
 .juku-title { margin-top: 0; }
 .juku-title img { margin-right: .5rem; vertical-align: middle; }
