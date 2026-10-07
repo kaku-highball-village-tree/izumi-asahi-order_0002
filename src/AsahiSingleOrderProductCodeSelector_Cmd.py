@@ -142,20 +142,30 @@ FOUR_WEEKLY_TEMPLATE_FILE_NAME: str = (
     "template_イズミ週間予定表_4列_広島広島岡山四国センター.xlsx"
 )
 FOUR_WEEKLY_SUFFIX: str = "_広島広島岡山四国センター"
-FOUR_WEEKLY_MAX_ROW: int = 71
+FOUR_WEEKLY_MAX_ROW: int = 73
 FOUR_WEEKLY_MAX_COLUMN: int = 38
 FOUR_WEEKLY_MAX_STORES_PER_BLOCK: int = 60
 FOUR_WEEKLY_MAX_HIROSHIMA_STORES: int = 120
 FOUR_WEEKLY_DATE_COLUMNS: tuple[int, ...] = (4, 13, 23, 32)
-FOUR_WEEKLY_SHIPMENT_DATES = tuple((8, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
-FOUR_WEEKLY_DELIVERY_DATES = tuple((10, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
-FOUR_WEEKLY_SHIPMENT_WEEKDAYS = tuple((9, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
-FOUR_WEEKLY_DELIVERY_WEEKDAYS = tuple((11, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
+FOUR_WEEKLY_SHIPMENT_DATES = tuple((10, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
+FOUR_WEEKLY_DELIVERY_DATES = tuple((12, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
+FOUR_WEEKLY_SHIPMENT_WEEKDAYS = tuple((11, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
+FOUR_WEEKLY_DELIVERY_WEEKDAYS = tuple((13, c) for c in FOUR_WEEKLY_DATE_COLUMNS)
 FOUR_WEEKLY_AREA_RANGES: tuple[tuple[str, int, int, int, int], ...] = (
-    ("広島1～60", 12, 71, 2, 10),
-    ("広島61～120", 12, 71, 11, 19),
-    ("岡山", 12, 71, 21, 29),
-    ("四国", 12, 71, 30, 38),
+    ("広島1～60", 14, 73, 2, 10),
+    ("広島61～120", 14, 73, 11, 19),
+    ("岡山", 14, 73, 21, 29),
+    ("四国", 14, 73, 30, 38),
+)
+FOUR_WEEKLY_TOTAL_RANGES: tuple[tuple[str, int, int, int], ...] = (
+    ("広島1～60", 8, 3, 4),
+    ("広島61～120", 8, 12, 13),
+    ("岡山", 8, 22, 23),
+    ("四国", 8, 31, 32),
+)
+FOUR_WEEKLY_SUBTOTAL_RANGES: tuple[tuple[str, int, int, int], ...] = tuple(
+    (pszArea, 9, iLabelColumn, iQuantityColumn)
+    for pszArea, _, iLabelColumn, iQuantityColumn in FOUR_WEEKLY_TOTAL_RANGES
 )
 PRODUCT_HEADERS: tuple[str, str, str] = ("productCode", "productName", "spec")
 COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
@@ -1433,6 +1443,17 @@ def validate_standard_weekly_subtotal_template(objWorksheet: Worksheet) -> None:
                 )
 
 
+def validate_four_weekly_subtotal_template(objWorksheet: Worksheet) -> None:
+    """4列版の集計用8・9行目が空欄であることを確認します。"""
+    for iRow in (8, 9):
+        for iColumn in range(1, FOUR_WEEKLY_MAX_COLUMN + 1):
+            if objWorksheet.cell(iRow, iColumn).value is not None:
+                raise ValueError(
+                    "4列版週間予定表の集計用8・9行目が空欄ではありません。セル = "
+                    + get_column_letter(iColumn) + str(iRow)
+                )
+
+
 def build_weekly_tsv_rows(
     objCachedWorksheet: Worksheet,
     pszCreationDate: str,
@@ -1903,6 +1924,8 @@ def validate_step0003_outputs(
         )
         if iMaximumColumn == WEEKLY_TSV_MAX_COLUMN and iMaximumRow == WEEKLY_TSV_MAX_ROW:
             validate_standard_weekly_subtotal_template(objWorksheet)
+        elif iMaximumColumn == FOUR_WEEKLY_MAX_COLUMN and iMaximumRow == FOUR_WEEKLY_MAX_ROW:
+            validate_four_weekly_subtotal_template(objWorksheet)
         for pszCell in (
             (pszCreationDateCell,) if isinstance(pszCreationDateCell, str)
             else pszCreationDateCell
@@ -2025,6 +2048,8 @@ def create_step0003_outputs(
         )
         if iMaximumColumn == WEEKLY_TSV_MAX_COLUMN and iMaximumRow == WEEKLY_TSV_MAX_ROW:
             validate_standard_weekly_subtotal_template(objCachedWorksheet)
+        elif iMaximumColumn == FOUR_WEEKLY_MAX_COLUMN and iMaximumRow == FOUR_WEEKLY_MAX_ROW:
+            validate_four_weekly_subtotal_template(objCachedWorksheet)
         validate_fixed_weekdays(
             objCachedWorksheet, tupleShipmentWeekdayRanges, tupleDeliveryWeekdayRanges
         )
@@ -2317,8 +2342,8 @@ def build_step0004_rows(
         listOutputRows[iSubtotalRow - 1][iLabelColumn - 1] = "小計"
         for iOffset in range(7):
             objSubtotal = sum(
-                Decimal(listAreaRow[iOffset + 2] or "0")
-                for listAreaRow in listAreaRows
+                (Decimal(listAreaRow[iOffset + 2] or "0") for listAreaRow in listAreaRows),
+                Decimal(0) if tupleAreaRanges == FOUR_WEEKLY_AREA_RANGES else 0,
             )
             listOutputRows[iSubtotalRow - 1][iQuantityStartColumn - 1 + iOffset] = (
                 str(int(objSubtotal))
@@ -2334,9 +2359,9 @@ def build_step0004_rows(
             listOutputRows[iTotalRow - 1][iColumn - 1] = ""
         listOutputRows[iTotalRow - 1][iLabelColumn - 1] = "合計"
         objTotal = sum(
-            Decimal(pszQuantity or "0")
-            for listAreaRow in listAreaRows
-            for pszQuantity in listAreaRow[2:9]
+            (Decimal(pszQuantity or "0")
+             for listAreaRow in listAreaRows for pszQuantity in listAreaRow[2:9]),
+            Decimal(0) if tupleAreaRanges == FOUR_WEEKLY_AREA_RANGES else 0,
         )
         listOutputRows[iTotalRow - 1][iValueColumn - 1] = (
             str(int(objTotal))
@@ -2425,6 +2450,7 @@ def set_cell_value_in_worksheet_xml(
     iAreaStartRow: int,
     iAreaEndRow: int,
     iCellXfsCount: int,
+    tupleStyleAreaRanges: tuple[tuple[str, int, int, int, int], ...] | None = None,
 ) -> bytes:
     """既存セルを更新し、値がある未作成セルは同列の書式で挿入します。"""
     bytesReference: bytes = re.escape(pszCellReference.encode("ascii"))
@@ -2450,6 +2476,7 @@ def set_cell_value_in_worksheet_xml(
             iAreaStartRow,
             iAreaEndRow,
             iCellXfsCount,
+            tupleStyleAreaRanges,
         )
     iStart, iEnd, bytesPrefix = get_cell_xml_span(bytesWorksheet, pszCellReference)
     bytesOriginalCell: bytes = bytesWorksheet[iStart:iEnd]
@@ -2570,18 +2597,20 @@ def get_cell_style_for_new_cell(
     iAreaStartRow: int,
     iAreaEndRow: int,
     iCellXfsCount: int,
+    tupleStyleAreaRanges: tuple[tuple[str, int, int, int, int], ...] | None = None,
 ) -> tuple[bytes, bytes]:
     """同列を優先し、同じ役割の他エリア列も使ってs属性を返します。"""
     iTargetColumn: int = 0
     for pszCharacter in pszColumnLetters:
         iTargetColumn = iTargetColumn * 26 + ord(pszCharacter) - ord("A") + 1
-    tupleStyleAreaRanges = (
-        FOUR_WEEKLY_AREA_RANGES if iAreaEndRow == FOUR_WEEKLY_MAX_ROW
-        else STEP0004_AREA_RANGES
-    )
-    tupleStyleRoleColumns = (
-        tuple(tuple(r[3] + i for r in tupleStyleAreaRanges) for i in range(9))
-        if iAreaEndRow == FOUR_WEEKLY_MAX_ROW else STEP0004_ROLE_COLUMNS
+    if tupleStyleAreaRanges is None:
+        tupleStyleAreaRanges = (
+            FOUR_WEEKLY_AREA_RANGES if iAreaEndRow == FOUR_WEEKLY_MAX_ROW
+            else STEP0004_AREA_RANGES
+        )
+    tupleStyleRoleColumns = tuple(
+        tuple(iStartColumn + iOffset for _, _, _, iStartColumn, _ in tupleStyleAreaRanges)
+        for iOffset in range(9)
     )
     tupleRoleColumns: tuple[int, ...] | None = next(
         (tupleColumns for tupleColumns in tupleStyleRoleColumns
@@ -2746,6 +2775,7 @@ def insert_cell_value_in_worksheet_xml(
     iAreaStartRow: int,
     iAreaEndRow: int,
     iCellXfsCount: int,
+    tupleStyleAreaRanges: tuple[tuple[str, int, int, int, int], ...] | None = None,
 ) -> bytes:
     """存在しないセルを対象行の列順へ、近傍セルのs属性付きで挿入します。"""
     objReferenceMatch: re.Match[str] | None = re.fullmatch(
@@ -2762,6 +2792,7 @@ def insert_cell_value_in_worksheet_xml(
         iAreaStartRow,
         iAreaEndRow,
         iCellXfsCount,
+        tupleStyleAreaRanges,
     )
     bytesRowNumber: bytes = re.escape(str(iTargetRow).encode("ascii"))
     objRowPattern: re.Pattern[bytes] = re.compile(
@@ -2890,6 +2921,7 @@ def update_step0004_cells_in_worksheet_xml(
                     iAreaStartRow=iStartRow,
                     iAreaEndRow=iEndRow,
                     iCellXfsCount=iCellXfsCount,
+                    tupleStyleAreaRanges=tupleAreaRanges,
                 )
     for (_, iSubtotalRow, iLabelColumn, iQuantityStartColumn), listAreaRows in zip(
         tupleSubtotalRanges, tupleAreaRows
@@ -2902,6 +2934,7 @@ def update_step0004_cells_in_worksheet_xml(
             iAreaStartRow=iSubtotalRow,
             iAreaEndRow=iSubtotalRow,
             iCellXfsCount=iCellXfsCount,
+            tupleStyleAreaRanges=tupleAreaRanges,
         )
         bytesWorksheet = set_cell_value_in_worksheet_xml(
             bytesWorksheet,
@@ -2911,11 +2944,12 @@ def update_step0004_cells_in_worksheet_xml(
             iAreaStartRow=iSubtotalRow,
             iAreaEndRow=iSubtotalRow,
             iCellXfsCount=iCellXfsCount,
+            tupleStyleAreaRanges=tupleAreaRanges,
         )
         for iOffset in range(7):
             objSubtotal = sum(
-                Decimal(listAreaRow[iOffset + 2] or "0")
-                for listAreaRow in listAreaRows
+                (Decimal(listAreaRow[iOffset + 2] or "0") for listAreaRow in listAreaRows),
+                Decimal(0) if tupleAreaRanges == FOUR_WEEKLY_AREA_RANGES else 0,
             )
             pszValue = (
                 str(int(objSubtotal))
@@ -2931,6 +2965,7 @@ def update_step0004_cells_in_worksheet_xml(
                 iAreaStartRow=iSubtotalRow,
                 iAreaEndRow=iSubtotalRow,
                 iCellXfsCount=iCellXfsCount,
+                tupleStyleAreaRanges=tupleAreaRanges,
             )
     for (
         (_, iTotalRow, iLabelColumn, iValueColumn),
@@ -2946,6 +2981,7 @@ def update_step0004_cells_in_worksheet_xml(
                 iAreaStartRow=iTotalRow,
                 iAreaEndRow=iTotalRow,
                 iCellXfsCount=iCellXfsCount,
+                tupleStyleAreaRanges=tupleAreaRanges,
             )
         bytesWorksheet = set_cell_value_in_worksheet_xml(
             bytesWorksheet,
@@ -2955,11 +2991,12 @@ def update_step0004_cells_in_worksheet_xml(
             iAreaStartRow=iTotalRow,
             iAreaEndRow=iTotalRow,
             iCellXfsCount=iCellXfsCount,
+            tupleStyleAreaRanges=tupleAreaRanges,
         )
         objTotal = sum(
-            Decimal(pszQuantity or "0")
-            for listAreaRow in listAreaRows
-            for pszQuantity in listAreaRow[2:9]
+            (Decimal(pszQuantity or "0")
+             for listAreaRow in listAreaRows for pszQuantity in listAreaRow[2:9]),
+            Decimal(0) if tupleAreaRanges == FOUR_WEEKLY_AREA_RANGES else 0,
         )
         pszTotal = (
             str(int(objTotal))
@@ -2974,6 +3011,7 @@ def update_step0004_cells_in_worksheet_xml(
             iAreaStartRow=iTotalRow,
             iAreaEndRow=iTotalRow,
             iCellXfsCount=iCellXfsCount,
+            tupleStyleAreaRanges=tupleAreaRanges,
         )
     return bytesWorksheet
 
@@ -3866,17 +3904,21 @@ def validate_four_weekly_step0005_rows(
         FOUR_WEEKLY_MAX_COLUMN, FOUR_WEEKLY_MAX_ROW,
         FOUR_WEEKLY_SHIPMENT_DATES, FOUR_WEEKLY_DELIVERY_DATES,
     )
+    validate_step0004_subtotals(
+        listRows, FOUR_WEEKLY_AREA_RANGES,
+        FOUR_WEEKLY_SUBTOTAL_RANGES, FOUR_WEEKLY_TOTAL_RANGES,
+    )
     listCommonDates: tuple[list[date], list[date]] | None = None
     for iStartColumn in FOUR_WEEKLY_DATE_COLUMNS:
         for iRow, tupleExpected in (
-            (9, ("日", "月", "火", "水", "木", "金", "土")), (11, WEEKDAYS)
+            (11, ("日", "月", "火", "水", "木", "金", "土")), (13, WEEKDAYS)
         ):
             if tuple(listRows[iRow - 1][iStartColumn - 1:iStartColumn + 6]) != tupleExpected:
                 raise ValueError("4列版step0004 TSVの曜日が仕様どおりではありません。")
         listShip, listDelivery = (
             [parse_step0005_date(listRows[r - 1][iStartColumn - 1 + i],
                 str(objPath) + " " + get_column_letter(iStartColumn + i) + str(r))
-             for i in range(7)] for r in (8, 10)
+             for i in range(7)] for r in (10, 12)
         )
         if any(d.weekday() != i or d != listDelivery[0] + timedelta(days=i)
                or d != listShip[i] + timedelta(days=1)
@@ -4656,7 +4698,8 @@ def process_input_file(
             (listHiroshimaRows[:60], listHiroshimaRows[60:], listOkayamaRows, listShikokuRows),
             FOUR_WEEKLY_AREA_RANGES, FOUR_WEEKLY_MAX_COLUMN,
             FOUR_WEEKLY_MAX_STORES_PER_BLOCK, FOUR_WEEKLY_MAX_ROW,
-            FOUR_WEEKLY_SHIPMENT_DATES, FOUR_WEEKLY_DELIVERY_DATES, (), (),
+            FOUR_WEEKLY_SHIPMENT_DATES, FOUR_WEEKLY_DELIVERY_DATES,
+            FOUR_WEEKLY_SUBTOTAL_RANGES, FOUR_WEEKLY_TOTAL_RANGES,
         )
         try:
             listStep0005OutputPaths = create_step0005_outputs(
