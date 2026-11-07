@@ -35,7 +35,6 @@ STEP_HEADERS: tuple[str, ...] = (
     "曜日",
     "配送パターン",
     "便",
-    "Ｐ品番",
     "APEX品番",
     "商品名",
     "産地",
@@ -173,7 +172,6 @@ COLUMN_WIDTH_LIMITS: tuple[tuple[int, int], ...] = (
     (6, 8),
     (14, 24),
     (8, 12),
-    (14, 22),
     (14, 22),
     (24, 50),
     (14, 30),
@@ -364,6 +362,33 @@ def read_tsv_table(objInputPath: Path) -> tuple[list[list[str]], str]:
     return listRows, "ProductCodeSelector_step0001"
 
 
+def normalize_product_code_columns(listRows: list[list[str]]) -> list[list[str]]:
+    """旧形式のＰ品番列を除去し、新形式へ統一したコピーを返します。"""
+    if len(listRows) != 2 + len(WEEKDAYS):
+        raise ValueError(
+            "商品別step0007はヘッダー2行とデータ7行の合計9行ではありません。"
+            + " 行数 = "
+            + str(len(listRows))
+        )
+    iColumnCount: int = len(listRows[0])
+    for iRow, listRow in enumerate(listRows, start=1):
+        if len(listRow) != iColumnCount:
+            raise ValueError(f"商品別step0007の{iRow}行目の列数が一致しません。")
+    tupleLegacyHeaders: tuple[str, ...] = (
+        STEP_HEADERS[:4] + ("Ｐ品番",) + STEP_HEADERS[4:]
+    )
+    tupleHeaders: tuple[str, ...] = tuple(
+        pszValue.strip() for pszValue in listRows[1]
+    )
+    if tupleHeaders[: len(tupleLegacyHeaders)] == tupleLegacyHeaders:
+        return [listRow[:4] + listRow[5:] for listRow in listRows]
+    if tupleHeaders[: len(STEP_HEADERS)] == STEP_HEADERS:
+        return [listRow.copy() for listRow in listRows]
+    raise ValueError(
+        "商品別step0007の2行目の基本項目ヘッダーが旧形式・新形式のいずれにも一致しません。"
+    )
+
+
 def validate_step0007_table(listRows: list[list[str]]) -> None:
     """商品別step0007の2行ヘッダーと月～日7行を検証します。"""
     if len(listRows) != 2 + len(WEEKDAYS):
@@ -374,17 +399,17 @@ def validate_step0007_table(listRows: list[list[str]]) -> None:
         )
     iColumnCount: int = len(listRows[0])
     if iColumnCount < len(STEP_HEADERS):
-        raise ValueError("商品別step0007の列数が14列未満です。")
+        raise ValueError("商品別step0007の列数が13列未満です。")
     for iRow, listRow in enumerate(listRows, start=1):
         if len(listRow) != iColumnCount:
             raise ValueError(f"商品別step0007の{iRow}行目の列数が一致しません。")
     if any(pszValue.strip() for pszValue in listRows[0][: len(STEP_HEADERS)]):
-        raise ValueError("商品別step0007の1行目A～N列が空欄ではありません。")
+        raise ValueError("商品別step0007の1行目A～M列が空欄ではありません。")
     if (
         tuple(pszValue.strip() for pszValue in listRows[1][: len(STEP_HEADERS)])
         != STEP_HEADERS
     ):
-        raise ValueError("商品別step0007の2行目A～N列が仕様どおりではありません。")
+        raise ValueError("商品別step0007の2行目A～M列が仕様どおりではありません。")
     listStoreCodes: list[str] = [
         pszValue.strip() for pszValue in listRows[0][len(STEP_HEADERS) :]
     ]
@@ -394,8 +419,8 @@ def validate_step0007_table(listRows: list[list[str]]) -> None:
         raise ValueError("商品別step0007の店舗コードが重複しています。")
 
     listDataRows: list[list[str]] = listRows[2:]
-    # 商品基本情報は月曜日行だけに入り、火～日のC～N列は空欄またはメモです。
-    if not listDataRows[0][6].strip():
+    # 商品基本情報は月曜日行だけに入り、火～日のC～M列は空欄またはメモです。
+    if not listDataRows[0][5].strip():
         raise ValueError("商品別step0007の商品名が空欄です。")
     for iDay, (listRow, pszExpectedWeekday) in enumerate(zip(listDataRows, WEEKDAYS)):
         iFileRow: int = iDay + 3
@@ -427,11 +452,10 @@ def validate_step0007_table(listRows: list[list[str]]) -> None:
 
 
 def clear_product_codes(listRows: list[list[str]]) -> list[list[str]]:
-    """データ7行のＰ品番とAPEX品番を空欄にしたコピーを返します。"""
+    """データ7行のAPEX品番を空欄にしたコピーを返します。"""
     listOutputRows: list[list[str]] = [listRow.copy() for listRow in listRows]
     for listRow in listOutputRows[2:]:
         listRow[4] = ""
-        listRow[5] = ""
     return listOutputRows
 
 
@@ -537,7 +561,6 @@ def save_excel_table(
         elif iRow >= 3:
             objWorksheet.cell(iRow, 1).number_format = "yyyy/mm/dd"
             objWorksheet.cell(iRow, 5).number_format = "@"
-            objWorksheet.cell(iRow, 6).number_format = "@"
     adjust_excel_column_widths(objWorksheet)
     objWorkbook.save(objOutputPath)
 
@@ -554,8 +577,8 @@ def validate_outputs_match(objExcelPath: Path, objTsvPath: Path) -> None:
     listTsvRows, _ = read_tsv_table(objTsvPath)
     if listExcelRows != listTsvRows:
         raise ValueError("step0001のXLSXとTSVの内容が一致しません。")
-    if any(listRow[4].strip() or listRow[5].strip() for listRow in listExcelRows[2:]):
-        raise ValueError("step0001のＰ品番またはAPEX品番が空欄ではありません。")
+    if any(listRow[4].strip() for listRow in listExcelRows[2:]):
+        raise ValueError("step0001のAPEX品番が空欄ではありません。")
 
 
 def get_source_products_file_path() -> Path:
@@ -1160,12 +1183,12 @@ def get_step0003_store_order_output_paths(
 def build_store_order_rows(
     listStep0002Rows: list[list[str]], dictStoreAreas: dict[str, str]
 ) -> tuple[list[list[str]], list[list[str]], list[list[str]], list[list[str]]]:
-    """O1から最終店舗列の9行を転置し、全店舗と3エリアに分けます。"""
+    """N1から最終店舗列の9行を転置し、全店舗と3エリアに分けます。"""
     if len(listStep0002Rows) != 9:
         raise ValueError("step0002は9行ではありません。")
     iColumnCount: int = len(listStep0002Rows[0])
     if iColumnCount <= len(STEP_HEADERS):
-        raise ValueError("step0002のO列以降に店舗がありません。")
+        raise ValueError("step0002のN列以降に店舗がありません。")
     if any(len(listRow) != iColumnCount for listRow in listStep0002Rows):
         raise ValueError("step0002の行ごとの列数が一致しません。")
     listAllRows: list[list[str]] = []
@@ -4308,16 +4331,15 @@ def write_step0005_error(objHiroshimaTsvPath: Path, pszMessage: str) -> Path:
 def build_step0002_rows(
     listStep0001Rows: list[list[str]], objCandidate: ProductCandidate
 ) -> list[list[str]]:
-    """選択商品を月曜日へ設定し、元のG3～G8をG4～G9へ移動します。"""
+    """選択商品を月曜日へ設定し、元のF3～F8をF4～F9へ移動します。"""
     listRows: list[list[str]] = [listRow.copy() for listRow in listStep0001Rows]
-    listOriginalProductNames: list[str] = [listRows[iRow][6] for iRow in range(2, 8)]
+    listOriginalProductNames: list[str] = [listRows[iRow][5] for iRow in range(2, 8)]
     for listRow in listRows[2:]:
         listRow[4] = ""
-        listRow[5] = ""
-    listRows[2][5] = objCandidate.code
-    listRows[2][6] = objCandidate.name
+    listRows[2][4] = objCandidate.code
+    listRows[2][5] = objCandidate.name
     for iOffset, pszOriginalName in enumerate(listOriginalProductNames, start=3):
-        listRows[iOffset][6] = pszOriginalName
+        listRows[iOffset][5] = pszOriginalName
     return listRows
 
 
@@ -4571,8 +4593,9 @@ def process_input_file(
         listRows, pszWorksheetTitle = read_excel_table(objInputPath)
     else:
         listRows, pszWorksheetTitle = read_tsv_table(objInputPath)
+    listRows = normalize_product_code_columns(listRows)
     validate_step0007_table(listRows)
-    pszProductName: str = listRows[2][6].strip()
+    pszProductName: str = listRows[2][5].strip()
     objExcelOutputPath, objTsvOutputPath = get_output_paths(
         objInputPath, pszProductName
     )
@@ -4602,7 +4625,7 @@ def process_input_file(
     listAllCandidates: list[ProductCandidate] = read_product_candidates(
         get_products_file_path()
     )
-    pszInputSpec: str = listStep0001ExcelRows[2][8].strip()
+    pszInputSpec: str = listStep0001ExcelRows[2][7].strip()
     listMatchedCandidates: list[ProductCandidate] = find_product_candidates(
         listAllCandidates, pszProductName, pszInputSpec
     )
@@ -4611,7 +4634,7 @@ def process_input_file(
         pszInputSpec,
         listMatchedCandidates,
         listAllCandidates,
-        listStep0001ExcelRows[8][6].strip(),
+        listStep0001ExcelRows[8][5].strip(),
     )
     listStep0002Rows: list[list[str]] = build_step0002_rows(
         listStep0001ExcelRows, objSelectedCandidate
