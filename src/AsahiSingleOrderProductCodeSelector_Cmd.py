@@ -1863,6 +1863,8 @@ def save_weekly_template_with_creation_date(
     pszCreationDateCell: str | tuple[str, ...] = "Y1",
     tupleShipmentRanges: tuple[tuple[int, int], ...] = SHIPMENT_DATE_ROW_RANGES,
     tupleDeliveryRanges: tuple[tuple[int, int], ...] = DELIVERY_DATE_ROW_RANGES,
+    tupleProductNameCells: tuple[str, ...] = (),
+    pszProductName: str = "",
 ) -> str:
     """XLSXの描画パーツを保ったままY1と週間日付を更新します。"""
     with zipfile.ZipFile(objTemplatePath, mode="r") as objSourceArchive:
@@ -1883,6 +1885,16 @@ def save_weekly_template_with_creation_date(
             tupleShipmentRanges,
             tupleDeliveryRanges,
         )
+        for pszCell in tupleProductNameCells:
+            bytesUpdatedWorksheet = set_cell_value_in_worksheet_xml(
+                bytesUpdatedWorksheet,
+                pszCell,
+                pszProductName,
+                bNumeric=False,
+                iAreaStartRow=5,
+                iAreaEndRow=5,
+                iCellXfsCount=get_cell_xfs_count(objSourceArchive),
+            )
         with zipfile.ZipFile(objOutputPath, mode="w") as objOutputArchive:
             objOutputArchive.comment = objSourceArchive.comment
             for objInfo in objSourceArchive.infolist():
@@ -1938,6 +1950,8 @@ def validate_step0003_outputs(
         tuple[int, int], ...
     ] = DELIVERY_WEEKDAY_ROW_RANGES,
     iMaximumRow: int = WEEKLY_TSV_MAX_ROW,
+    tupleProductNameCells: tuple[str, ...] = (),
+    pszProductName: str = "",
 ) -> None:
     """step0003の作成日と週間予定表TSVを保存後に確認します。"""
     objWorkbook: Workbook = load_workbook(objExcelPath, data_only=False)
@@ -1945,6 +1959,11 @@ def validate_step0003_outputs(
         objWorksheet: Worksheet = validate_weekly_template(
             objWorkbook, iMaximumColumn, iMaximumRow
         )
+        for pszCell in tupleProductNameCells:
+            if objWorksheet[pszCell].value != pszProductName:
+                raise ValueError(
+                    "step0003 XLSXの" + pszCell + "がstep0002 F3の商品名と一致しません。"
+                )
         if iMaximumColumn == WEEKLY_TSV_MAX_COLUMN and iMaximumRow == WEEKLY_TSV_MAX_ROW:
             validate_standard_weekly_subtotal_template(objWorksheet)
         elif iMaximumColumn == FOUR_WEEKLY_MAX_COLUMN and iMaximumRow == FOUR_WEEKLY_MAX_ROW:
@@ -2046,6 +2065,12 @@ def create_step0003_outputs(
     if listExcelRows != listTsvRows:
         raise ValueError("step0002のXLSXとTSVの内容が一致しません。")
     listDeliveryDates: list[date] = get_step0002_delivery_dates(listExcelRows)
+    if len(listTsvRows[2]) < 6 or not listTsvRows[2][5].strip():
+        raise ValueError("商品名の参照元step0002 TSVのF3が存在しないか空欄です。")
+    pszProductName: str = listTsvRows[2][5]
+    tupleProductNameCells: tuple[str, ...] = (
+        ("B5", "U5") if iMaximumColumn == FOUR_WEEKLY_MAX_COLUMN else ("B5", "K5")
+    )
 
     if objTemplatePath is None:
         objTemplatePath = get_weekly_template_file_path()
@@ -2086,6 +2111,8 @@ def create_step0003_outputs(
             tupleDeliveryDateRanges,
             iMaximumRow,
         )
+        for pszCell in tupleProductNameCells:
+            listWeeklyRows[4][objCachedWorksheet[pszCell].column - 1] = pszProductName
         objTemporaryExcelPath: Path = create_temporary_path(objStep0003ExcelPath)
         objTemporaryTsvPath: Path = create_temporary_path(objStep0003TsvPath)
         try:
@@ -2097,6 +2124,8 @@ def create_step0003_outputs(
                 pszCreationDateCell,
                 tupleShipmentDateRanges,
                 tupleDeliveryDateRanges,
+                tupleProductNameCells,
+                pszProductName,
             )
             save_tsv_table(objTemporaryTsvPath, listWeeklyRows)
             validate_step0003_outputs(
@@ -2112,6 +2141,8 @@ def create_step0003_outputs(
                 tupleShipmentWeekdayRanges,
                 tupleDeliveryWeekdayRanges,
                 iMaximumRow,
+                tupleProductNameCells,
+                pszProductName,
             )
             validate_unmodified_xlsx_parts(
                 objTemplatePath, objTemporaryExcelPath, pszWorksheetPart
