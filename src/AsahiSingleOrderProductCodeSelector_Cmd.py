@@ -473,33 +473,41 @@ def get_output_paths(objInputPath: Path, pszProductName: str) -> tuple[Path, Pat
     iMarkerCount: int = objInputPath.stem.count(STEP0007_MARKER)
     if iMarkerCount == 0:
         pszOutputStem: str = OUTPUT_PREFIX + sanitize_filename_part(objInputPath.stem)
-        return (
-            objInputPath.with_name(pszOutputStem + ".xlsx"),
-            objInputPath.with_name(pszOutputStem + ".tsv"),
-        )
-    if iMarkerCount > 1:
+    elif iMarkerCount > 1:
         raise ValueError(
             "入力ファイル名に_step0007_を複数含めることはできません。Path = "
             + str(objInputPath)
         )
-    _, pszIdentity = objInputPath.stem.split(STEP0007_MARKER, 1)
-    if "_" not in pszIdentity:
-        raise ValueError("step0007のファイル名に商品コード以降の情報がありません。")
-    _, pszAfterCode = pszIdentity.split("_", 1)
-    pszSafeProductName: str = sanitize_filename_part(pszProductName)
-    pszExpectedProductPrefix: str = pszSafeProductName + "_"
-    if not pszAfterCode.startswith(pszExpectedProductPrefix):
-        raise ValueError("step0007のファイル名の商品名が入力表の商品名と一致しません。")
-    pszSuffix: str = pszAfterCode[len(pszExpectedProductPrefix) :]
-    if not pszSuffix:
-        raise ValueError("step0007のファイル名に配送センター情報がありません。")
-    pszOutputStem = OUTPUT_PREFIX + sanitize_filename_part(
-        pszSafeProductName + "_" + pszSuffix
-    )
-    return (
-        objInputPath.with_name(pszOutputStem + ".xlsx"),
-        objInputPath.with_name(pszOutputStem + ".tsv"),
-    )
+    else:
+        _, pszIdentity = objInputPath.stem.split(STEP0007_MARKER, 1)
+        if "_" not in pszIdentity:
+            raise ValueError("step0007のファイル名に商品コード以降の情報がありません。")
+        _, pszAfterCode = pszIdentity.split("_", 1)
+        pszSafeProductName: str = sanitize_filename_part(pszProductName)
+        pszExpectedProductPrefix: str = pszSafeProductName + "_"
+        if not pszAfterCode.startswith(pszExpectedProductPrefix):
+            raise ValueError("step0007のファイル名の商品名が入力表の商品名と一致しません。")
+        pszSuffix: str = pszAfterCode[len(pszExpectedProductPrefix) :]
+        if not pszSuffix:
+            raise ValueError("step0007のファイル名に配送センター情報がありません。")
+        pszOutputStem = OUTPUT_PREFIX + sanitize_filename_part(
+            pszSafeProductName + "_" + pszSuffix
+        )
+
+    objExcelOutputPath: Path = objInputPath.with_name(pszOutputStem + ".xlsx")
+    objTsvOutputPath: Path = objInputPath.with_name(pszOutputStem + ".tsv")
+    if not objExcelOutputPath.exists() and not objTsvOutputPath.exists():
+        return objExcelOutputPath, objTsvOutputPath
+    iSequence: int = 1
+    while True:
+        pszSequencedStem: str = pszOutputStem + "_" + f"{iSequence:04d}"
+        objSequencedExcelPath: Path = objInputPath.with_name(
+            pszSequencedStem + ".xlsx"
+        )
+        objSequencedTsvPath: Path = objInputPath.with_name(pszSequencedStem + ".tsv")
+        if not objSequencedExcelPath.exists() and not objSequencedTsvPath.exists():
+            return objSequencedExcelPath, objSequencedTsvPath
+        iSequence += 1
 
 
 def calculate_display_width(objValue: object, iColumn: int) -> int:
