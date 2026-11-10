@@ -3784,6 +3784,15 @@ def update_step0005_cells_in_worksheet_xml(
             pszCellReference,
             (objTargetDate - objExcelEpoch).days,
         )
+    bytesWorksheet = set_cell_value_in_worksheet_xml(
+        bytesWorksheet,
+        "K9",
+        str(dictDetailCells[(9, 11)]),
+        bNumeric=False,
+        iAreaStartRow=9,
+        iAreaEndRow=9,
+        iCellXfsCount=iCellXfsCount,
+    )
     for iRow in range(FRESH_FISH_DETAIL_START_ROW, FRESH_FISH_DETAIL_END_ROW + 1):
         for iColumn in range(2, FRESH_FISH_MAX_COLUMN + 1):
             objValue = dictDetailCells.get((iRow, iColumn), "")
@@ -3973,8 +3982,18 @@ def create_step0005_outputs(
     tupleAreaTsvPaths: tuple[Path, Path, Path],
     objOkayamaTsvPath: Path | None = None,
     bFourColumn: bool = False,
+    *,
+    objStep0002TsvPath: Path,
 ) -> list[tuple[Path, Path]]:
     """通常版または分割版step0004から月～日の鮮魚明細票を一括作成します。"""
+    if not objStep0002TsvPath.is_file():
+        raise ValueError("商品名の参照元step0002 TSVが見つかりません。Path = " + str(objStep0002TsvPath))
+    listStep0002Rows, _ = read_tsv_table(objStep0002TsvPath)
+    if len(listStep0002Rows) < 3 or len(listStep0002Rows[2]) < 6:
+        raise ValueError("商品名の参照元step0002 TSVにF3がありません。")
+    pszSelectedProductName: str = listStep0002Rows[2][5]
+    if not pszSelectedProductName.strip():
+        raise ValueError("商品名の参照元step0002 TSVのF3が空欄です。")
     listHiroshimaRows, _ = read_tsv_table(objHiroshimaTsvPath)
     pszMarker = "ProductCodeSelector_step0004_"
     pszSuffix = "_広島センター"
@@ -4123,6 +4142,7 @@ def create_step0005_outputs(
                     listShikokuOrders if iPage == 1 else [],
                     bDoubleHiroshima,
                 )
+                dictDetailCells[(9, 11)] = pszSelectedProductName
                 dictDetailCells.update(
                     build_step0005_summary_cells(
                         listHiroshimaOrders,
@@ -4192,6 +4212,7 @@ def create_step0005_outputs(
                     )
                 listTsvRows[4][9] = format_japanese_date(objShipmentDate)
                 listTsvRows[5][9] = format_japanese_date(objDeliveryDate)
+                listTsvRows[8][10] = pszSelectedProductName
                 save_tsv_table(objTsvTemp, listTsvRows)
                 pszWorksheetPart = save_step0005_xlsx(
                     objTemplatePath,
@@ -4224,6 +4245,8 @@ def create_step0005_outputs(
                             "step0005 XLSXのシート名・順番・表示状態が変更されました。"
                         )
                     objSavedWorksheet = objSavedWorkbook[FRESH_FISH_TEMPLATE_SHEET_NAME]
+                    if objSavedWorksheet["K9"].value != pszSelectedProductName:
+                        raise ValueError("step0005 XLSXのK9がstep0002 F3の商品名と一致しません。")
                     for pszCell, objExpectedDate in (
                         ("J5", objShipmentDate),
                         ("J6", objDeliveryDate),
@@ -4262,6 +4285,8 @@ def create_step0005_outputs(
                     len(listRow) != FRESH_FISH_MAX_COLUMN for listRow in listSavedRows
                 ):
                     raise ValueError("step0005 TSVが60行×13列ではありません。")
+                if listSavedRows[8][10] != pszSelectedProductName:
+                    raise ValueError("step0005 TSVのK9がstep0002 F3の商品名と一致しません。")
                 for iRow in range(14, 54):
                     for iColumn in range(2, 14):
                         pszExpectedValue = str(dictDetailCells.get((iRow, iColumn), ""))
@@ -4701,6 +4726,7 @@ def process_input_file(
             listStep0005OutputPaths = create_step0005_outputs(
                 objStep0004TsvPath,
                 (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
+                objStep0002TsvPath=objStep0002TsvPath,
             )
         except Exception as objException:
             write_step0005_error(objStep0004TsvPath, str(objException))
@@ -4729,6 +4755,7 @@ def process_input_file(
                 objH4t,
                 (tupleStoreOrderPaths[1], tupleStoreOrderPaths[2], tupleStoreOrderPaths[3]),
                 bFourColumn=True,
+                objStep0002TsvPath=objStep0002TsvPath,
             )
         except Exception as objException:
             write_step0005_error(objH4t, str(objException))
