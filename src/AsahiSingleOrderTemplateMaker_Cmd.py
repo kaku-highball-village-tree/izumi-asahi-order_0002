@@ -82,6 +82,10 @@ STORE_DEFINITIONS: tuple[tuple[str, str], ...] = (
 )
 SUPPORTED_EXTENSIONS: set[str] = {".xlsx", ".tsv", ".csv"}
 AREA_STORE_MAPPING_FILE_NAME: str = "AsahiOrderAreaStoreMapping_対応表.txt"
+STEP0008_DISTRICT_CENTERS = {
+    "広島地区": ("広島センター", "広島センター_岡山・四国転送分"),
+    "九州地区": ("九州センター", "熊本チルドセンター", "北九州チルドセンター"),
+}
 # 0.25は25%の商品削除確率を意味します。
 PRODUCT_DELETE_PROBABILITY: float = 0.25
 MIN_PRODUCT_COUNT: int = 1
@@ -98,7 +102,7 @@ class ProductRow:
 
 
 class ProductFilePlan:
-    """商品別Step0003～Step0007の識別情報と出力パスを保持します。"""
+    """商品別Step0003～Step0008の識別情報と出力パスを保持します。"""
 
     def __init__(
         self,
@@ -169,6 +173,10 @@ class Step0006Error(Exception):
 
 class Step0007Error(Exception):
     """処理0007で発生したエラーであることを呼び出し元へ伝えます。"""
+
+
+class Step0008Error(Exception):
+    """処理0008で発生したエラーであることを呼び出し元へ伝えます。"""
 
 
 def write_error_text(pszOutputFileFullPath: str, pszErrorMessage: str) -> None:
@@ -1934,6 +1942,12 @@ def build_product_file_plans(
         objPlan.output_paths["step0005_warning.txt"] = objInputPath.with_name(
             objInputPath.stem + "_step0005_" + objPlan.file_identity + "_warning.txt"
         )
+        for pszDistrict in STEP0008_DISTRICT_CENTERS:
+            pszStem = objInputPath.stem + "_step0008_" + objPlan.file_identity + "_" + pszDistrict
+            for pszSuffix in (".xlsx", ".tsv"):
+                objPlan.output_paths["step0008_" + pszDistrict + pszSuffix] = (
+                    objInputPath.with_name(pszStem + pszSuffix)
+                )
         for pszCenterName in listCenterNames:
             pszCenterStem: str = objPlan.file_identity + "_" + dictSafeCenterNames[pszCenterName]
             dictCenterPaths: dict[str, Path] = {}
@@ -2523,9 +2537,10 @@ def process_product_step0007_files(
     objPlan: ProductFilePlan,
     listCenterNames: list[str],
     objProgress: ProductProcessingProgress,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """配送センター別処理0006の正式な両出力から処理0007を作成して確定します。"""
     listWarnings: list[str] = []
+    listCreatedCenters: list[str] = []
     dictTemporaryOutputs: dict[Path, Path] = {}
     setOldWarningPathsToArchive: set[Path] = set()
     try:
@@ -2616,6 +2631,7 @@ def process_product_step0007_files(
             )
             validate_step0005_tables_match(listRows, listSavedExcelRows)
             objProgress.validated_outputs += 2
+            listCreatedCenters.append(pszCenterName)
         commit_product_output_set(dictTemporaryOutputs, objProgress)
         for objWarningPath in setOldWarningPathsToArchive:
             archive_existing_product_files([objWarningPath], objProgress)
@@ -2624,7 +2640,101 @@ def process_product_step0007_files(
             if objTemporaryPath.exists():
                 objTemporaryPath.unlink()
     objProgress.center_name = "なし"
-    return listWarnings
+    return listWarnings, listCreatedCenters
+
+
+def build_product_step0008_rows(
+    listInputPairs: list[tuple[Path, Path]], pszApexCode: str,
+) -> list[list[str]]:
+    """同じ商品の週間表を照合し、店舗列をセンター順で横に並べます。"""
+    iCommonColumns = len(STEP0002_HEADERS)
+    listMergedRows: list[list[str]] = []
+    dictStoreSources: dict[str, Path] = {}
+    for objExcelPath, objTsvPath in listInputPairs:
+        try:
+            listRows = read_step0005_excel_table(objExcelPath)
+            validate_step0005_tables_match(listRows, read_step0005_tsv_table(objTsvPath))
+            validate_step0007_product_groups(listRows, objExcelPath.name)
+            if len(listRows) != 2 + len(WEEKDAYS):
+                raise ValueError("商品別step0007はヘッダー2行と納品日7行が必要です。")
+            if listRows[2][5].strip() != pszApexCode:
+                raise ValueError("step0007のAPEX品番が対象商品と一致しません。")
+            if listMergedRows and any(
+                listExisting[:iCommonColumns] != listIncoming[:iCommonColumns]
+                for listExisting, listIncoming in zip(listMergedRows, listRows)
+            ):
+                raise ValueError(
+                    "納品日または共通の商品情報が一致しません。比較元 = "
+                    + listInputPairs[0][0].name
+                )
+            for pszCode in listRows[0][iCommonColumns:]:
+                pszCode = pszCode.strip()
+                if pszCode in dictStoreSources:
+                    raise ValueError(
+                        f"店舗コードが重複しています。店舗コード = {pszCode}、"
+                        f"比較元 = {dictStoreSources[pszCode].name}"
+                    )
+                dictStoreSources[pszCode] = objExcelPath
+            if not listMergedRows:
+                listMergedRows = [listRow.copy() for listRow in listRows]
+            else:
+                for listExisting, listIncoming in zip(listMergedRows, listRows):
+                    listExisting.extend(listIncoming[iCommonColumns:])
+        except (ValueError, OSError) as objException:
+            raise ValueError(
+                f"{objExcelPath.name} / {objTsvPath.name}\n{objException}"
+            ) from objException
+    return listMergedRows
+
+
+def process_product_step0008_files(
+    objPlan: ProductFilePlan, listCreatedCenters: list[str],
+    objProgress: ProductProcessingProgress,
+) -> None:
+    """今回生成したstep0007から地区ごとのXLSX・TSVを作ります。"""
+    dictCreatedPaths = {
+        sanitize_delivery_center_filename(pszCenter): objPlan.center_output_paths[pszCenter]
+        for pszCenter in listCreatedCenters
+    }
+    listErrors: list[str] = []
+    for pszDistrict, tupleCenters in STEP0008_DISTRICT_CENTERS.items():
+        objProgress.center_name = pszDistrict
+        objExcelPath = objPlan.output_paths["step0008_" + pszDistrict + ".xlsx"]
+        objTsvPath = objPlan.output_paths["step0008_" + pszDistrict + ".tsv"]
+        listInputPairs = [
+            (dictCreatedPaths[pszCenter]["step0007.xlsx"], dictCreatedPaths[pszCenter]["step0007.tsv"])
+            for pszCenter in tupleCenters if pszCenter in dictCreatedPaths
+        ]
+        if not listInputPairs:
+            archive_existing_product_files([objExcelPath, objTsvPath], objProgress)
+            objProgress.actual_output_targets -= 2
+            continue
+        try:
+            listRows = build_product_step0008_rows(listInputPairs, objPlan.apex_code)
+        except ValueError as objException:
+            listErrors.append(f"{pszDistrict}\n{objException}")
+            continue
+        dictTemporaryOutputs: dict[Path, Path] = {}
+        try:
+            objExcelTemp = create_product_temporary_output(
+                objExcelPath, dictTemporaryOutputs, objProgress
+            )
+            objTsvTemp = create_product_temporary_output(
+                objTsvPath, dictTemporaryOutputs, objProgress
+            )
+            save_step0006_excel_template(objExcelTemp, listRows)
+            save_step0006_tsv_template(objTsvTemp, listRows)
+            listSavedRows = read_step0005_excel_table(objExcelTemp)
+            validate_step0005_tables_match(listRows, listSavedRows)
+            validate_step0005_tables_match(listSavedRows, read_step0005_tsv_table(objTsvTemp))
+            objProgress.validated_outputs += 2
+            commit_product_output_set(dictTemporaryOutputs, objProgress)
+        finally:
+            for objTemporaryPath in dictTemporaryOutputs.values():
+                objTemporaryPath.unlink(missing_ok=True)
+    objProgress.center_name = "なし"
+    if listErrors:
+        raise ValueError("\n\n".join(listErrors))
 
 
 def process_product_file_pipeline(
@@ -2709,15 +2819,15 @@ def process_product_file_pipeline(
             objProgress.completed_process_name = "処理0006"
 
             objProgress.process_name = "処理0007"
-            listWarnings.extend(
-                process_product_step0007_files(
-                    pszInputFileFullPath,
-                    objPlan,
-                    listCenterNames,
-                    objProgress,
-                )
+            listStep0007Warnings, listCreatedCenters = process_product_step0007_files(
+                pszInputFileFullPath, objPlan, listCenterNames, objProgress
             )
+            listWarnings.extend(listStep0007Warnings)
             objProgress.completed_process_name = "処理0007"
+
+            objProgress.process_name = "処理0008"
+            process_product_step0008_files(objPlan, listCreatedCenters, objProgress)
+            objProgress.completed_process_name = "処理0008"
         if objProgress.temp_backup_directory != "なし":
             objBackupDirectory = Path(objProgress.temp_backup_directory)
             print("Temp Backup Directory: " + str(objBackupDirectory))
@@ -2729,6 +2839,8 @@ def process_product_file_pipeline(
         return listPlans, listWarnings, objProgress
     except Exception as objException:
         pszDetail = format_product_processing_error(str(objException), objProgress)
+        if objProgress.process_name == "処理0008":
+            raise Step0008Error(pszDetail) from objException
         if objProgress.process_name == "処理0007":
             raise Step0007Error(pszDetail) from objException
         if objProgress.process_name == "処理0006":
@@ -2745,7 +2857,7 @@ def process_input_file(
     objStartMonday: date,
     objMappingPath: Path | None = None,
 ) -> None:
-    """入力から処理0001～処理0007のXLSX・TSVを作成します。"""
+    """入力から処理0001～処理0008のXLSX・TSVを作成します。"""
     validate_start_monday(objStartMonday)
     if objMappingPath is None:
         objMappingPath = get_default_mapping_file_path()
@@ -2804,7 +2916,10 @@ def process_input_file(
     print("Mapping: " + str(objMappingPath))
     for objPlan in listProductPlans:
         for pszKey, objOutputPath in objPlan.output_paths.items():
-            if pszKey.endswith("warning.txt") and not objOutputPath.exists():
+            if (
+                (pszKey.endswith("warning.txt") or pszKey.startswith("step0008_"))
+                and not objOutputPath.exists()
+            ):
                 continue
             print(pszKey + ": " + str(objOutputPath))
         for pszCenterName, dictPaths in objPlan.center_output_paths.items():
@@ -2896,6 +3011,13 @@ def main() -> int:
         except Exception as objException:
             raise Step0004Error(str(objException)) from objException
         process_input_file(pszInputFileFullPath, objStartMonday, objMappingPath)
+    except Step0008Error as objException:
+        report_processing_error(
+            pszInputFileFullPath,
+            "旭注文テンプレート処理0008",
+            str(objException),
+        )
+        return 1
     except Step0007Error as objException:
         report_processing_error(
             pszInputFileFullPath,

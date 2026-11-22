@@ -117,8 +117,9 @@ def draw_instruction_text(iWindowHandle: int) -> None:
         + str(PRODUCT_DELETE_PROBABILITY * 100)
         + "%の独立した削除抽選を行います。\n"
         "プログラムと同じフォルダーの配送センター・店舗対応表（3列または4列）を使用します。\n"
-        "同じフォルダーにstep0001～step0007のXLSX・TSVを作成します。\n"
+        "同じフォルダーにstep0001～step0008のXLSX・TSVを作成します。\n"
         "step0007では配送センターごとに発注のない商品を除外します。\n"
+        "step0008では、作成されたstep0007を広島地区・九州地区ごとにまとめます。\n"
         "既存の出力ファイルは自動的に上書きします。\n"
         "キャンセルまたはエラー時は <元ファイル名>_error.txt を出力します。"
     )
