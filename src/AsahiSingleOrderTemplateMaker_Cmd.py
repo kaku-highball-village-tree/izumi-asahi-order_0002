@@ -1376,7 +1376,7 @@ def get_default_mapping_file_path() -> Path:
 def read_area_store_mapping(
     objMappingPath: Path,
 ) -> list[tuple[str, str, str]]:
-    """配送センター・店舗コード・店舗略称の対応表を読み込みます。"""
+    """3列または4列の対応表から配送センター・店舗コード・店舗略称を読み込みます。"""
     if not objMappingPath.is_file():
         raise ValueError("対応表が見つかりません。Path = " + str(objMappingPath))
     listRows: list[list[str]] | None = None
@@ -1395,19 +1395,21 @@ def read_area_store_mapping(
     ]
     if not listNonBlankRows:
         raise ValueError("対応表が空です。")
-    tupleExpectedHeaders: tuple[str, str, str] = (
-        "配送センター名", "店舗コード", "店舗略称"
-    )
-    if tuple(pszValue.strip() for pszValue in listNonBlankRows[0]) != tupleExpectedHeaders:
+    tupleHeaders = tuple(pszValue.strip() for pszValue in listNonBlankRows[0])
+    if tupleHeaders not in (
+        ("配送センター名", "店舗コード", "店舗略称"),
+        ("配送センター名", "エリア名", "店舗コード", "店舗略称"),
+    ):
         raise ValueError("対応表のヘッダーが仕様どおりではありません。")
+    iExpectedColumns = len(tupleHeaders)
     listMappings: list[tuple[str, str, str]] = []
     setStoreCodes: set[str] = set()
     for iRow, listRow in enumerate(listNonBlankRows[1:], start=2):
-        if len(listRow) != 3:
+        if len(listRow) != iExpectedColumns:
             raise ValueError(
-                f"対応表の{iRow}行目が3列ではありません。列数 = {len(listRow)}"
+                f"対応表の{iRow}行目が{iExpectedColumns}列ではありません。列数 = {len(listRow)}"
             )
-        pszCenter, pszCode, pszName = (pszValue.strip() for pszValue in listRow)
+        pszCenter, pszCode, pszName = (listRow[i].strip() for i in (0, -2, -1))
         if not pszCenter or not pszCode or not pszName:
             raise ValueError(f"対応表の{iRow}行目に空欄があります。")
         if pszCode in setStoreCodes:
