@@ -8,6 +8,7 @@
 ###############################################################
 
 import csv
+import filecmp
 import hashlib
 import math
 import os
@@ -179,6 +180,10 @@ class Step0007Error(Exception):
 
 class Step0008Error(Exception):
     """処理0008で発生したエラーであることを呼び出し元へ伝えます。"""
+
+
+class Step0009Error(Exception):
+    """処理0009で発生したエラーであることを呼び出し元へ伝えます。"""
 
 
 def write_error_text(pszOutputFileFullPath: str, pszErrorMessage: str) -> None:
@@ -2241,7 +2246,10 @@ def build_step0005_table_rows(listStep0005Rows: list[list[object]]) -> list[list
 
 
 def commit_product_output_set(
-    dictTemporaryOutputs: dict[Path, Path], objProgress: ProductProcessingProgress
+    dictTemporaryOutputs: dict[Path, Path],
+    objProgress: ProductProcessingProgress,
+    *,
+    listStalePaths: list[Path] | None = None,
 ) -> None:
     """1つの処理段階の出力を一括確定し、失敗時は同段階の出力を復旧します。"""
     dictBackups: dict[Path, Path] = {}
@@ -2259,6 +2267,8 @@ def commit_product_output_set(
                 objProgress.warning_files += 1
             else:
                 objProgress.committed_outputs += 1
+        if listStalePaths:
+            archive_existing_product_files(listStalePaths, objProgress)
     except Exception:
         for objOutputPath in reversed(listReplaced):
             try:
@@ -2819,6 +2829,49 @@ def process_product_step0008_files(
         raise ValueError("\n\n".join(listErrors))
 
 
+def process_product_step0009_files(
+    objInputPath: Path, objPlan: ProductFilePlan, objProgress: ProductProcessingProgress,
+) -> None:
+    """店舗数指定対象商品の広島地区版を、内容を変えずにペアで確定します。"""
+    tupleSuffixes = (".xlsx", ".tsv")
+    listSourcePaths = [
+        objPlan.output_paths["step0008_広島地区" + pszSuffix]
+        for pszSuffix in tupleSuffixes
+    ]
+    for objSourcePath in listSourcePaths:
+        if not objSourcePath.is_file():
+            raise ValueError("step0009のコピー元がありません。Path = " + str(objSourcePath))
+    listOutputPaths = [
+        objPlan.output_paths["step0009_広島地区" + pszSuffix]
+        for pszSuffix in tupleSuffixes
+    ]
+    setOutputNames = {objPath.name.casefold() for objPath in listOutputPaths}
+    pszPrefix = (objInputPath.stem + "_step0009_").casefold()
+    listStalePaths = [
+        objPath for objPath in sorted(objInputPath.parent.iterdir())
+        if objPath.name.casefold().startswith(pszPrefix)
+        and objPath.name.casefold().endswith(("_広島地区.xlsx", "_広島地区.tsv"))
+        and objPath.name.casefold() not in setOutputNames
+        and objPath.is_file()
+    ]
+    dictTemporaryOutputs: dict[Path, Path] = {}
+    try:
+        for objSourcePath, objOutputPath in zip(listSourcePaths, listOutputPaths):
+            objTemporaryPath = create_product_temporary_output(
+                objOutputPath, dictTemporaryOutputs, objProgress
+            )
+            shutil.copyfile(objSourcePath, objTemporaryPath)
+            if not filecmp.cmp(objSourcePath, objTemporaryPath, shallow=False):
+                raise ValueError("step0009のコピー内容が一致しません。Path = " + str(objSourcePath))
+            objProgress.validated_outputs += 1
+        commit_product_output_set(
+            dictTemporaryOutputs, objProgress, listStalePaths=listStalePaths
+        )
+    finally:
+        for objTemporaryPath in dictTemporaryOutputs.values():
+            objTemporaryPath.unlink(missing_ok=True)
+
+
 def process_product_file_pipeline(
     pszInputFileFullPath: str,
     objStep0002ExcelPath: Path,
@@ -2842,6 +2895,14 @@ def process_product_file_pipeline(
         objHiroshimaTarget = select_hiroshima_target_product(
             listPlans, pszInputFileFullPath, objStartMonday
         )
+        objInputPath = Path(pszInputFileFullPath)
+        pszStep0009Stem = (
+            objInputPath.stem + "_step0009_" + objHiroshimaTarget.file_identity + "_広島地区"
+        )
+        for pszSuffix in (".xlsx", ".tsv"):
+            objHiroshimaTarget.output_paths["step0009_広島地区" + pszSuffix] = (
+                objInputPath.with_name(pszStep0009Stem + pszSuffix)
+            )
         objProgress.total_products = len(listPlans)
         objProgress.planned_outputs = sum(
             sum(
@@ -2924,6 +2985,12 @@ def process_product_file_pipeline(
             objProgress.process_name = "処理0008"
             process_product_step0008_files(objPlan, listCreatedCenters, objProgress)
             objProgress.completed_process_name = "処理0008"
+            if iSpecifiedStoreCount is not None:
+                objProgress.process_name = "処理0009"
+                objProgress.center_name = "広島地区"
+                process_product_step0009_files(objInputPath, objPlan, objProgress)
+                objProgress.completed_process_name = "処理0009"
+                objProgress.center_name = "なし"
         if objProgress.temp_backup_directory != "なし":
             objBackupDirectory = Path(objProgress.temp_backup_directory)
             print("Temp Backup Directory: " + str(objBackupDirectory))
@@ -2935,6 +3002,8 @@ def process_product_file_pipeline(
         return listPlans, listWarnings, objProgress
     except Exception as objException:
         pszDetail = format_product_processing_error(str(objException), objProgress)
+        if objProgress.process_name == "処理0009":
+            raise Step0009Error(pszDetail) from objException
         if objProgress.process_name == "処理0008":
             raise Step0008Error(pszDetail) from objException
         if objProgress.process_name == "処理0007":
@@ -2954,7 +3023,7 @@ def process_input_file(
     iHiroshimaStoreCount: int,
     objMappingPath: Path | None = None,
 ) -> None:
-    """入力から処理0001～処理0008のXLSX・TSVを作成します。"""
+    """入力から処理0001～処理0009のXLSX・TSVを作成します。"""
     validate_start_monday(objStartMonday)
     if objMappingPath is None:
         objMappingPath = get_default_mapping_file_path()
@@ -3144,6 +3213,13 @@ def main() -> int:
         process_input_file(
             pszInputFileFullPath, objStartMonday, iHiroshimaStoreCount, objMappingPath
         )
+    except Step0009Error as objException:
+        report_processing_error(
+            pszInputFileFullPath,
+            "旭注文テンプレート処理0009",
+            str(objException),
+        )
+        return 1
     except Step0008Error as objException:
         report_processing_error(
             pszInputFileFullPath,
